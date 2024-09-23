@@ -1,0 +1,9 @@
+/csv_files
+/nc_file
+/nc_files
+auto_submitter.py
+comp_utils.py
+environments.yml
+*.yml
+Getting Started.ipynb
+zeug.txt
