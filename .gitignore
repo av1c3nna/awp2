@@ -7,3 +7,4 @@ environments.yml
 *.yml
 Getting Started.ipynb
 zeug.txt
+*.json
