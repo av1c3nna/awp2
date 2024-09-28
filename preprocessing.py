@@ -101,6 +101,26 @@ class PandasPreprocessing:
         
         return self
     
+    def convert_to_datetime(self, columns, tz=None):
+        """Converts one or more columns to a localized pandas datetime object."""
+        for column in columns:
+            if tz is None:
+                self.dataframe[column] = pd.to_datetime(self.dataframe[column])
+            else:
+                self.dataframe[column] = pd.to_datetime(self.dataframe[column]).dt.tz_localize(tz)
+
+        return self
+    
+    def adjust_mwh(self, mwh_columns, new_columns, boas):
+        """Creates new columns for adjusted mwh values over 30-minute periods."""
+        for new_column, column in zip(new_columns, mwh_columns):
+            if column in boas:
+                self.dataframe[new_column] = 0.5 * self.dataframe[column] - self.dataframe[boas[column]]
+            else:
+                self.dataframe[new_column] = 0.5 * self.dataframe[column]
+
+        return self
+
     def get_dataframe(self):
         """Returns the processed dataframe."""
         
