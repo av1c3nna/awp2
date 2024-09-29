@@ -127,7 +127,7 @@ class Preprocessing:
         # dismissed outages are not relevant
         json_data = json_data[json_data.eventStatus != "Dismissed"]
         # drop those columns since they provide no value as features
-        json_data.drop(columns = ["id", "outageProfile", "assetId", "affectedUnitEIC", "dataset", "eventStatus", "cause", "publishTime", "createdTime", "relatedInformation", "revisionNumber"], axis = 1, inplace = True)
+        json_data.drop(columns = ["id", "outageProfile", "assetId", "affectedUnitEIC", "dataset", "eventStatus", "cause", "publishTime", "createdTime", "relatedInformation", "revisionNumber", "mrid"], axis = 1, inplace = True)
 
         # drop string value columns with only one unique value. If it´s not used for the deployment, we are in the training phase instead. Search through every column and save their names so during deployment, they will get removed instantly next time.
         # if the preprocessing is used for the deployment, we already know which features provide no information. During deployment we might have to use interference on a single row, so just searching for columns with one unique value can only work
@@ -164,7 +164,7 @@ class Preprocessing:
         outages_df["hoursSinceOutage"] = (outages_df.index - outages_df.eventStartTime).div(pd.Timedelta("1h"))
         outages_df["hoursUntilOutageEnd"] = (outages_df.eventEndTime - outages_df.index).div(pd.Timedelta("1h"))
         outages_df["outage"] = True
-        outages_df["mrid"] = outages_df["mrid"].str.split("-").str[-1]
+        #outages_df["mrid"] = outages_df["mrid"].str.split("-").str[-1]
 
         outages_df["unavailableCapacity"] = pd.to_numeric(outages_df["unavailableCapacity"])
         outages_df["availableCapacity"] = pd.to_numeric(outages_df["availableCapacity"])
@@ -208,7 +208,7 @@ class Preprocessing:
         energy_with_outages = pd.merge_asof(left = energy_data, right = outage_data, left_on = "dtm", right_on = outage_data.sort_index().index, direction = "nearest", tolerance = pd.Timedelta("30m"))
 
         # the merge will result in NA values (since outages are not present all the time), thus they have to be filled with replacement values
-        energy_with_outages[["mrid", "affectedUnit", "unavailabilityType"]] = energy_with_outages[["mrid", "affectedUnit", "unavailabilityType"]].fillna("None")
+        energy_with_outages[["affectedUnit", "unavailabilityType"]] = energy_with_outages[["affectedUnit", "unavailabilityType"]].fillna("None")
         energy_with_outages[["unavailableCapacity", "hoursSinceOutage", "hoursUntilOutageEnd"]] = energy_with_outages[["unavailableCapacity", "hoursSinceOutage", "hoursUntilOutageEnd"]].fillna(0)
         energy_with_outages[["availableCapacity"]] = energy_with_outages[["availableCapacity"]].fillna(400)
         energy_with_outages["outage"] = energy_with_outages["outage"].fillna(False).astype(int)
@@ -407,7 +407,6 @@ class Preprocessing:
 
         for col in ['RelativeHumidity', 'Temperature', 'TotalPrecipitation',
                     'WindDirection', 'WindSpeed', 'MIP',
-                    'SS_Price', 'boa_MWh', 'DA_Price',
                     'availableCapacity', 'unavailableCapacity',
                     'CloudCover', 'SolarDownwardRadiation', 'Temperature']:
     
