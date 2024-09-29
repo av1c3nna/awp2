@@ -62,8 +62,9 @@ class FileExtractor:
 
 class Preprocessing:
 
-    def __init__(self):
-        pass
+    def __init__(self, for_deployment:bool = False):
+        self.for_deployment = for_deployment
+        self.irrelevant_features = list()
 
 
     def cyclic_sin(self, n):
@@ -128,18 +129,24 @@ class Preprocessing:
         # drop those columns since they provide no value as features
         json_data.drop(columns = ["id", "outageProfile", "assetId", "affectedUnitEIC", "dataset", "eventStatus", "cause", "publishTime", "createdTime", "relatedInformation", "revisionNumber"], axis = 1, inplace = True)
 
-        # drop string value columns with only one unique value
-        for col in json_data.columns:
-            if json_data[col].nunique() == 1 and json_data[col].dtypes == "O":
-                try:
-                    json_data.drop(columns = col, inplace = True, axis = 1)
-                except:
-                    continue
+        # drop string value columns with only one unique value. If it´s not used for the deployment, we are in the training phase instead. Search through every column and save their names so during deployment, they will get removed instantly next time.
+        # if the preprocessing is used for the deployment, we already know which features provide no information. During deployment we might have to use interference on a single row, so just searching for columns with one unique value can only work
+        # during the preprocessing of training data.
+        if self.for_deployment == False:
+            for col in json_data.columns:
+                if json_data[col].nunique() == 1:
+                        try:
+                            json_data.drop(columns = col, inplace = True, axis = 1)
+                            self.irrelevant_features.append(col)
+                        except:
+                            continue
+        else:
+            if len(self.irrelevant_features) > 0:
+                json_data.drop(columns = self.irrelevant_features, axis = 1, inplace = True)
 
         # convert the datetime information to the right format
         for col in ["eventStartTime", "eventEndTime"]:
             json_data[col] = pd.to_datetime(json_data[col])
-
 
         outages_df = pd.DataFrame(columns = json_data.columns)
 
@@ -158,6 +165,9 @@ class Preprocessing:
         outages_df["hoursUntilOutageEnd"] = (outages_df.eventEndTime - outages_df.index).div(pd.Timedelta("1h"))
         outages_df["outage"] = True
         outages_df["mrid"] = outages_df["mrid"].str.split("-").str[-1]
+
+        outages_df["unavailableCapacity"] = pd.to_numeric(outages_df["unavailableCapacity"])
+        outages_df["availableCapacity"] = pd.to_numeric(outages_df["availableCapacity"])
 
         outages_df.drop(columns = ["eventStartTime", "eventEndTime"], axis = 1, inplace = True)
 
@@ -180,10 +190,11 @@ class Preprocessing:
 
         df_energy["Wind_MWh_credit"] = df_energy["Wind_MW"] - df_energy["boa_MWh"]
         df_energy.rename(columns = {"Solar_MW": "Solar_MWh_credit", "Wind_MW": "Wind_MWh"}, inplace = True)
+        df_energy.drop(["Wind_MWh"], axis = 1, inplace = True)
 
         df_energy["unused_Solar_capacity_mwp"] = df_energy["Solar_installedcapacity_mwp"] = df_energy["Solar_capacity_mwp"]
 
-        for col in ["month", "day", "dayofweek", "hour", "minute"]:
+        for col in ["month", "day", "dayofweek", "hour"]:
             time_col_sin = "sin_" + col
             time_col_cos = "cos_" + col
 
@@ -199,7 +210,7 @@ class Preprocessing:
         # the merge will result in NA values (since outages are not present all the time), thus they have to be filled with replacement values
         energy_with_outages[["mrid", "affectedUnit", "unavailabilityType"]] = energy_with_outages[["mrid", "affectedUnit", "unavailabilityType"]].fillna("None")
         energy_with_outages[["unavailableCapacity", "hoursSinceOutage", "hoursUntilOutageEnd"]] = energy_with_outages[["unavailableCapacity", "hoursSinceOutage", "hoursUntilOutageEnd"]].fillna(0)
-        energy_with_outages[["normalCapacity", "availableCapacity"]] = energy_with_outages[["normalCapacity", "availableCapacity"]].fillna(400)
+        energy_with_outages[["availableCapacity"]] = energy_with_outages[["availableCapacity"]].fillna(400)
         energy_with_outages["outage"] = energy_with_outages["outage"].fillna(False).astype(int)
 
         return energy_with_outages
@@ -378,12 +389,15 @@ class Preprocessing:
         assert("datetime" in str(geo_data[left_merge].dtype), f"First input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime.")
         assert("datetime" in str(energy_outage_data[right_merge].dtype), f"Second input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime.")
 
-        merged_data = pd.merge_asof(geo_data.sort_values(left_merge), energy_outage_data, left_on = left_merge, right_on = right_merge, direction = "nearest", tolerance = pd.Timedelta("15min"))
+        merged_data = pd.merge_asof(geo_data.sort_values(left_merge), energy_outage_data, left_on = left_merge, right_on = right_merge, direction = "nearest", tolerance = pd.Timedelta("30min"))
         merged_data = merged_data.dropna(axis = 0)
         merged_data.set_index(right_merge, inplace = True)
 
         if left_merge in merged_data.columns:
             merged_data.drop(columns = [left_merge], axis = 1, inplace = True)
+
+
+        merged_data = merged_data.sort_index()
 
         return merged_data
     
@@ -393,7 +407,7 @@ class Preprocessing:
 
         for col in ['RelativeHumidity', 'Temperature', 'TotalPrecipitation',
                     'WindDirection', 'WindSpeed', 'MIP',
-                    'SS_Price', 'boa_MWh', 'DA_Price', 'normalCapacity',
+                    'SS_Price', 'boa_MWh', 'DA_Price',
                     'availableCapacity', 'unavailableCapacity',
                     'CloudCover', 'SolarDownwardRadiation', 'Temperature']:
     
