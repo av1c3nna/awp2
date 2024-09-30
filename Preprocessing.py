@@ -40,14 +40,17 @@ class FileExtractor:
 
         for file in os.listdir(path):
             if file.endswith(file_format) and file_name.lower() in file.lower(): 
-                print(file)
                 if file_format == ".nc":
                     ds = xarray.open_dataset(path + "/" + file)
 
                     if type(df) == type(str()):
                         df = ds.to_dataframe()
+                        print(file)
+                        print(df.shape)
                     else:
                         df_new = ds.to_dataframe()
+                        print(file)
+                        print(df_new.shape)
                 elif file_format == ".csv":
                     if type(df) == type(str()):
                         df = pd.read_csv(path + "/" + file)
@@ -358,15 +361,17 @@ class Preprocessing:
     
 
     def merge_weather_stations_data(self, weather_data_1, weather_data_2, aggregate_by:str = "valid_time"):
-        """Merge the weather data from the DFD and NCEP weather stations."""
+        """Merge the weather data from the DWD and NCEP weather stations."""
 
         assert(aggregate_by in weather_data_1.columns, f"Dimension {aggregate_by} to aggregate by was not found in the first dataset.")
         assert(aggregate_by in weather_data_2.columns, f"Dimension {aggregate_by} to aggregate by was not found in the second dataset.")
         assert("datetime" in str(weather_data_1[aggregate_by].dtype), f"First input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime.")
         assert("datetime" in str(weather_data_2[aggregate_by].dtype), f"Second input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime.")
 
+        # NACH VALID UND REFERENCE TIME AGGREGIEREN
         weather_data = pd.concat([weather_data_1, weather_data_2]).groupby([aggregate_by]).mean()
 
+        # REFERENCE TIME NICHT RAUSNEHMEN
         if "reference_time" in weather_data.columns:
             return weather_data.drop(["reference_time"], axis = 1)
         else:
