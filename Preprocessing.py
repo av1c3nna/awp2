@@ -7,6 +7,8 @@ import os
 import json
 from datetime import datetime
 from math import sin, cos, pi
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, MinMaxScaler, RobustScaler
+from sklearn.model_selection import train_test_split, TimeSeriesSplit
 
 
 pd.set_option('future.no_silent_downcasting', True)
@@ -452,4 +454,36 @@ class Preprocessing:
         data = data[data.index != 0]
 
         return data
+    
+
+
+class FeatureEngineerer:
+    def __init__(self, data, columns_to_ohe:list = list(), train_ratio:float = 0.7, test_ratio:float = 0.1, scaler:str = "standard"):
+        self.columns_to_ohe = columns_to_ohe
+        self.train_ratio = train_ratio
+        self.test_ratio = test_ratio
+
+        if scaler.lower() == "standard":
+            self.scaler = StandardScaler()
+        elif scaler.lower() == "minmax":
+            self.scaler = MinMaxScaler()
+        else:
+            self.scaler = RobustScaler()
+
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(data, train_size = self.train_ratio, random_state = 42)
+
+        # check for valid input for columns to onehotencode
+        if len(self.columns_to_ohe) > 0:
+            for column in self.columns_to_ohe:
+                if column not in data.columns:
+                    self.columns_to_ohe.remove(column)
+
+            self.ohe = OneHotEncoder()
+            self.X_train = self.ohe.fit_transform(self.X_train)
+            self.X_test = self.ohe.transform(self.X_test)
+        else:
+            self.ohe = None
+
+        self.X_train = self.scaler.fit_transform(self.X_train)
+        self.X_test = self.scaler.transform(self.X_test)
 
