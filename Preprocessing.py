@@ -307,10 +307,10 @@ class Preprocessing:
 
     def add_statistical_data(self, df):
 
-        df_std = df.set_index("valid_time").resample("24h").std().sort_values("valid_time").drop(["reference_time"], axis = 1)
-        df_mean = df.set_index("valid_time").resample("24h").mean().sort_values("valid_time").drop(["reference_time"], axis = 1)
-        df_min = df.set_index("valid_time").resample("24h").min().sort_values("valid_time").drop(["reference_time"], axis = 1)
-        df_max = df.set_index("valid_time").resample("24h").max().sort_values("valid_time").drop(["reference_time"], axis = 1)
+        df_std = df.drop(["forecast_horizon"], axis = 1).set_index("valid_time").resample("24h").std().sort_values("valid_time").drop(["reference_time"], axis = 1)
+        df_mean = df.drop(["forecast_horizon"], axis = 1).set_index("valid_time").resample("24h").mean().sort_values("valid_time").drop(["reference_time"], axis = 1)
+        df_min = df.drop(["forecast_horizon"], axis = 1).set_index("valid_time").resample("24h").min().sort_values("valid_time").drop(["reference_time"], axis = 1)
+        df_max = df.drop(["forecast_horizon"], axis = 1).set_index("valid_time").resample("24h").max().sort_values("valid_time").drop(["reference_time"], axis = 1)
 
         df_std.columns = [x + "_std" for x in df_std.columns]
         df_mean.columns = [x + "_mean" for x in df_mean.columns]
