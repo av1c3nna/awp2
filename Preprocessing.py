@@ -428,6 +428,7 @@ class Preprocessing:
         merged_data = merged_data.interpolate("linear")
         merged_data = merged_data.dropna(axis = 0)
         merged_data.set_index(right_merge, inplace = True)
+        merged_data = merged_data.resample("30min").mean()
 
         if left_merge in merged_data.columns:
             merged_data.drop(columns = [left_merge], axis = 1, inplace = True)
