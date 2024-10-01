@@ -35,33 +35,48 @@ class FileExtractor:
 
     def combine_files(self, path, file_name, file_format:str=".nc"):
         """Combine files of the same dataset with different timestamps. Converts them into a dataframe."""
-        df = "a"
-        df_new = "a"
+        df = None
+        df_new = None
+
+        all_dfs = list()
 
         for file in os.listdir(path):
             if file.endswith(file_format) and file_name.lower() in file.lower(): 
                 if file_format == ".nc":
                     ds = xarray.open_dataset(path + "/" + file)
+                    df_new = ds.to_dataframe()
 
-                    if type(df) == type(str()):
-                        df = ds.to_dataframe()
-                        print(file)
-                        print(df.shape)
-                    else:
-                        df_new = ds.to_dataframe()
-                        print(file)
-                        print(df_new.shape)
+                    try:
+                        if len(df_new.index[0]) == 3:
+                            df_new = df_new.reorder_levels(["ref_datetime", "valid_datetime", "point"])
+                        elif len(df_new.index[0]) == 4:
+                            df_new = df_new.reorder_levels(["ref_datetime", "valid_datetime", "latitude", "longitude"])
+                        elif len(df_new.index[0]) == 5:
+                            df_new = df_new.reorder_levels(["ref_datetime", "valid_datetime", "latitude", "longitude", "point"])
+                        else:
+                            df_new = df_new.reorder_levels(["ref_datetime", "valid_datetime"])
+                    except:
+                        if len(df_new.index[0]) == 3:
+                            df_new = df_new.reorder_levels(["reference_time", "valid_time", "point"])
+                        elif len(df_new.index[0]) == 4:
+                            df_new = df_new.reorder_levels(["reference_time", "valid_time", "latitude", "longitude"])
+                        elif len(df_new.index[0]) == 5:
+                            df_new = df_new.reorder_levels(["reference_time", "valid_time", "latitude", "longitude", "point"])
+                        else:
+                            df_new = df_new.reorder_levels(["reference_time", "valid_time"])
+
+                    all_dfs.append(df_new)
+
                 elif file_format == ".csv":
-                    if type(df) == type(str()):
-                        df = pd.read_csv(path + "/" + file)
-                    else:
-                        df_new = pd.read_csv(path + "/" + file)
+                    df = pd.read_csv(path + "/" + file)
+                    all_dfs.append(df)
 
-                if type(df_new) != type(str()):
-                    df_total = pd.concat([df, df_new])
+        df_total = pd.concat(all_dfs)
+        df_total = df_total.drop_duplicates()
 
         return df_total
     
+
 
 class Preprocessing:
 
@@ -180,6 +195,7 @@ class Preprocessing:
     def preprocess_energy_data(self, df_energy):
         # convert the datetime information to the right format
         df_energy["dtm"] = pd.to_datetime(df_energy["dtm"])
+        df_energy = df_energy.sort_values("dtm")
 
         # Group by year, month, and hour, then calculate the mean
         grouped_means = df_energy.groupby([df_energy.dtm.dt.year, df_energy.dtm.dt.month, df_energy.dtm.dt.hour]).transform('mean')
@@ -203,6 +219,8 @@ class Preprocessing:
 
             df_energy[time_col_sin] = df_energy.dtm.apply(self.get_cycles, args = (0, col))
             df_energy[time_col_cos] = df_energy.dtm.apply(self.get_cycles, args = (1, col))
+
+        df_energy = df_energy.drop_duplicates()
 
         return df_energy
 
@@ -240,6 +258,7 @@ class Preprocessing:
             df.drop(columns = ["index"], axis = 1, inplace = True)
         # convert the datetime information to the right format
         df["reference_time"] = pd.to_datetime(df.reference_time).dt.tz_localize("UTC")
+        df["forecast_horizon"] = df["valid_time"]
         df["valid_time"] = df["reference_time"] + pd.to_timedelta(df["valid_time"], unit = "hour")
         # remove forecasts which extend beyond the day ahead, since they will be outdated the next day anyway
         df = df[(df["valid_time"] - df["reference_time"]).div(pd.Timedelta("1h")) < 50]
@@ -272,6 +291,10 @@ class Preprocessing:
 
 
     def handle_missing_data(self, df):
+
+        # Remove data points with at least 80% of the features containing missing values.
+        df = df[df.isna().sum(axis=1) <= 0.8]
+
         # Fill missing values by using the mean of other data points at a similiar time (same year, month and hour)
         mask = df.isna().any(axis=1)
         # Group by year, month, and hour, then calculate the mean
@@ -360,7 +383,7 @@ class Preprocessing:
         return math.cos(data)
     
 
-    def merge_weather_stations_data(self, weather_data_1, weather_data_2, aggregate_by:str = "valid_time"):
+    def merge_weather_stations_data(self, weather_data_1, weather_data_2, aggregate_by:str = "valid_time", aggregate_by_reference_time_too:bool = True):
         """Merge the weather data from the DWD and NCEP weather stations."""
 
         assert(aggregate_by in weather_data_1.columns, f"Dimension {aggregate_by} to aggregate by was not found in the first dataset.")
@@ -369,13 +392,15 @@ class Preprocessing:
         assert("datetime" in str(weather_data_2[aggregate_by].dtype), f"Second input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime.")
 
         # NACH VALID UND REFERENCE TIME AGGREGIEREN
-        weather_data = pd.concat([weather_data_1, weather_data_2]).groupby([aggregate_by]).mean()
-
-        # REFERENCE TIME NICHT RAUSNEHMEN
-        if "reference_time" in weather_data.columns:
-            return weather_data.drop(["reference_time"], axis = 1)
+        if aggregate_by_reference_time_too:
+            weather_data = pd.concat([weather_data_1, weather_data_2]).groupby(["reference_time", aggregate_by]).mean()
         else:
-            return weather_data
+            weather_data = pd.concat([weather_data_1, weather_data_2]).groupby([aggregate_by]).mean()
+
+            if "reference_time" in weather_data.columns:
+                weather_data = weather_data.drop(["reference_time"], axis = 1)
+
+        return weather_data
         
 
     def merge_geo_energy_outage_data(self, geo_data, energy_outage_data, left_merge:str = "valid_time", right_merge:str = "dtm"):
@@ -384,8 +409,10 @@ class Preprocessing:
         assert(left_merge in geo_data.columns, f"{left_merge} not found in geo data.")
         assert(right_merge in energy_outage_data.columns, f"{right_merge} not found in energy and outage data.")
 
-        if left_merge in geo_data.index.name:
-            geo_data = geo_data.reset_index()
+        geo_data = geo_data.reset_index()
+
+        if "index" in geo_data.columns:
+            geo_data.drop(columns = ["index"], axis = 1, inplace = True)
 
         assert(type(geo_data) == type(pd.DataFrame()), "Geo data is not a pandas dataframe object.")
         assert(type(energy_outage_data) == type(pd.DataFrame()), "Data with energy and outages is not a pandas dataframe object.")
@@ -394,7 +421,9 @@ class Preprocessing:
         assert("datetime" in str(geo_data[left_merge].dtype), f"First input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime.")
         assert("datetime" in str(energy_outage_data[right_merge].dtype), f"Second input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime.")
 
-        merged_data = pd.merge_asof(geo_data.sort_values(left_merge), energy_outage_data, left_on = left_merge, right_on = right_merge, direction = "nearest", tolerance = pd.Timedelta("30min"))
+        merged_data = geo_data.merge(energy_outage_data, left_on = left_merge, right_on = right_merge, how = "right")
+        # fill na values (geo data has only 60min intervals, thus every second 30min interval will be empty).
+        merged_data = merged_data.interpolate("linear")
         merged_data = merged_data.dropna(axis = 0)
         merged_data.set_index(right_merge, inplace = True)
 
