@@ -458,7 +458,14 @@ class Preprocessing:
 
 
 class FeatureEngineerer:
-    def __init__(self, data, columns_to_ohe:list = list(), train_ratio:float = 0.7, test_ratio:float = 0.1, scaler:str = "standard"):
+    def __init__(self, data, label:str = "Solar_MWh_credit", labels_to_remove:list = ["Solar_MWh_credit", "Wind_MWh_credit"], 
+                 columns_to_ohe:list = list(), train_ratio:float = 0.7, val_ratio:float = 0.2, test_ratio:float = 0.1, scaler:str = "standard"):
+        assert(train_ratio + val_ratio + test_ratio == 1, "Train, validation and test data ratio can only equal to 1 as a sum.")
+
+        self.label = label
+        if type(labels_to_remove) != type(list()):
+            labels_to_remove = [labels_to_remove]
+        self.labels_to_remove = labels_to_remove
         self.columns_to_ohe = columns_to_ohe
         self.train_ratio = train_ratio
         self.test_ratio = test_ratio
@@ -470,20 +477,47 @@ class FeatureEngineerer:
         else:
             self.scaler = RobustScaler()
 
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(data, train_size = self.train_ratio, random_state = 42)
+        self.train_val_test_split(data)
 
-        # check for valid input for columns to onehotencode
         if len(self.columns_to_ohe) > 0:
-            for column in self.columns_to_ohe:
+            self.onehotencode(data)
+
+        self.scale()
+
+
+    def train_val_test_split(self, data):
+        ts = TimeSeriesSplit(n_splits = 5)
+        # the last 10% of the dataset will be used for the test data set
+        X_train_val = data.drop(self.labels_to_remove, axis = 1).iloc[:int(data.shape[0] * (1 - self.test_ratio)), :]
+        y_train_val = data[self.label].iloc[:int(data.shape[0] * 0.9)]
+
+        self.X_test = data.drop(self.labels_to_remove, axis = 1).iloc[int(data.shape[0] * (1 - self.test_ratio)):, :]
+        self.y_test = data[self.label].iloc[int(data.shape[0] * 0.9):]
+
+        for train_index, val_index in ts.split(X_train_val):
+            self.X_train, self.X_val = X_train_val.iloc[train_index, :], X_train_val.iloc[val_index, :]
+            self.y_train, self.y_val = y_train_val.iloc[train_index], y_train_val.iloc[val_index]
+
+
+    def onehotencode(self, data, columns_to_ohe):
+        # check for valid input for columns to onehotencode
+        if len(columns_to_ohe) > 0:
+            for column in columns_to_ohe:
                 if column not in data.columns:
                     self.columns_to_ohe.remove(column)
 
+        if len(columns_to_ohe) > 1:
             self.ohe = OneHotEncoder()
-            self.X_train = self.ohe.fit_transform(self.X_train)
-            self.X_test = self.ohe.transform(self.X_test)
+            self.X_train[columns_to_ohe] = self.ohe.fit_transform(self.X_train[columns_to_ohe])
+            self.X_test[columns_to_ohe] = self.ohe.transform(self.X_test[columns_to_ohe])        
+            self.X_train[columns_to_ohe] = self.scaler.fit_transform(self.X_train[columns_to_ohe])
+            self.X_test[columns_to_ohe] = self.scaler.transform(self.X_test[columns_to_ohe])
         else:
-            self.ohe = None
+            print("No features found to onehotencode.")
 
+    
+    def scale(self):
         self.X_train = self.scaler.fit_transform(self.X_train)
+        self.X_val = self.scaler.transform(self.X_val)
         self.X_test = self.scaler.transform(self.X_test)
 
