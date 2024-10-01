@@ -430,8 +430,8 @@ class Preprocessing:
         if left_merge in merged_data.columns:
             merged_data.drop(columns = [left_merge], axis = 1, inplace = True)
 
-
         merged_data = merged_data.sort_index()
+        merged_data.drop(["reference_time"], axis = 1, inplace = True)
 
         return merged_data
     
