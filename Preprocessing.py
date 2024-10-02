@@ -199,7 +199,11 @@ class Preprocessing:
         df_energy["dtm"] = pd.to_datetime(df_energy["dtm"])
         df_energy = df_energy.sort_values("dtm")
 
-        df_energy = self.handle_missing_data(df_energy, "dtm")
+        # Group by year, month, and hour, then calculate the mean
+        grouped_means = df_energy.groupby([df_energy.dtm.dt.year, df_energy.dtm.dt.month, df_energy.dtm.dt.hour]).transform('mean')
+
+        # Fill missing values in df_energy with the corresponding grouped means
+        df_energy = df_energy.fillna(grouped_means)
 
         # convert MW to MWh (30min periods --> multiply by 0.5)
         for col in ["Solar_MW", "Wind_MW"]:
@@ -230,7 +234,7 @@ class Preprocessing:
 
     def preprocess_geo_data(self, df):
         df = self.clean_geo_data(df)
-        df = self.handle_missing_data(df, "valid_time")
+        df = self.handle_missing_data(df)
         df = self.add_statistical_data(df)
         df = self.add_other_features(df)
 
@@ -281,7 +285,7 @@ class Preprocessing:
         return df
 
 
-    def handle_missing_data(self, df, column_to_groupby:str):
+    def handle_missing_data(self, df):
 
         # Remove data points with at least 80% of the features containing missing values.
         df = df[df.isna().sum(axis=1) <= 0.8]
@@ -289,10 +293,9 @@ class Preprocessing:
         # Fill missing values by using the mean of other data points at a similiar time (same year, month and hour)
         mask = df.isna().any(axis=1)
         # Group by year, month, and hour, then calculate the mean
-        # NACH LONGITUDE UND LATITUDE DAZU AGGREGIEREN, VOR AGGREGIERUNG NACH REF UND VALID
-        grouped_means = df.groupby([df[column_to_groupby].dt.year, df[column_to_groupby].dt.month, df[column_to_groupby].dt.hour]).transform('mean')
+        grouped_means = df.groupby([df.valid_time.dt.year, df.valid_time.dt.month, df.valid_time.dt.hour]).transform('mean')
         # Fill missing values using the grouped means
-        df.loc[mask, :] = df.loc[mask, :].fillna(grouped_means)
+        df[mask] = df[mask].fillna(grouped_means)
         
         return df
 
@@ -386,11 +389,12 @@ class Preprocessing:
     def merge_weather_stations_data(self, weather_data_1, weather_data_2, aggregate_by:str = "valid_time", aggregate_by_reference_time_too:bool = True):
         """Merge the weather data from the DWD and NCEP weather stations."""
 
-        assert(aggregate_by in weather_data_1.columns, f"Dimension {aggregate_by} to aggregate by was not found in the first dataset.")
-        assert(aggregate_by in weather_data_2.columns, f"Dimension {aggregate_by} to aggregate by was not found in the second dataset.")
-        assert("datetime" in str(weather_data_1[aggregate_by].dtype), f"First input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime.")
-        assert("datetime" in str(weather_data_2[aggregate_by].dtype), f"Second input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime.")
+        assert aggregate_by in weather_data_1.columns, f"Dimension {aggregate_by} to aggregate by was not found in the first dataset."
+        assert aggregate_by in weather_data_2.columns, f"Dimension {aggregate_by} to aggregate by was not found in the second dataset."
+        assert "datetime" in str(weather_data_1[aggregate_by].dtype), f"First input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime."
+        assert "datetime" in str(weather_data_2[aggregate_by].dtype), f"Second input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime."
 
+        # NACH VALID UND REFERENCE TIME AGGREGIEREN
         if aggregate_by_reference_time_too:
             weather_data = pd.concat([weather_data_1, weather_data_2]).groupby(["reference_time", aggregate_by]).mean()
         else:
@@ -405,20 +409,20 @@ class Preprocessing:
     def merge_geo_energy_outage_data(self, geo_data, energy_outage_data, left_merge:str = "valid_time", right_merge:str = "dtm"):
         """Combine the geo data from the weather stations with the energy and outage data (CSV and JSON files combined)."""
 
-        assert(left_merge in geo_data.columns, f"{left_merge} not found in geo data.")
-        assert(right_merge in energy_outage_data.columns, f"{right_merge} not found in energy and outage data.")
-
         geo_data = geo_data.reset_index()
+
+        assert left_merge in geo_data.columns, f"{left_merge} not found in geo data."
+        assert right_merge in energy_outage_data.columns, f"{right_merge} not found in energy and outage data."
 
         if "index" in geo_data.columns:
             geo_data.drop(columns = ["index"], axis = 1, inplace = True)
 
-        assert(type(geo_data) == type(pd.DataFrame()), "Geo data is not a pandas dataframe object.")
-        assert(type(energy_outage_data) == type(pd.DataFrame()), "Data with energy and outages is not a pandas dataframe object.")
-        assert(geo_data.shape[0] > 0, "Geo data is empty.")
-        assert(energy_outage_data.shape[0] > 0, "Energy and outage data is empty.")
-        assert("datetime" in str(geo_data[left_merge].dtype), f"First input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime.")
-        assert("datetime" in str(energy_outage_data[right_merge].dtype), f"Second input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime.")
+        assert type(geo_data) == type(pd.DataFrame()), "Geo data is not a pandas dataframe object."
+        assert type(energy_outage_data) == type(pd.DataFrame()), "Data with energy and outages is not a pandas dataframe object."
+        assert geo_data.shape[0] > 0, "Geo data is empty."
+        assert energy_outage_data.shape[0] > 0, "Energy and outage data is empty."
+        assert "datetime" in str(geo_data[left_merge].dtype), f"First input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime."
+        assert "datetime" in str(energy_outage_data[right_merge].dtype), f"Second input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime."
 
         merged_data = geo_data.merge(energy_outage_data, left_on = left_merge, right_on = right_merge, how = "right")
         # fill na values (geo data has only 60min intervals, thus every second 30min interval will be empty).
@@ -440,7 +444,8 @@ class Preprocessing:
         """Add features based on the difference of values between data points."""
 
         for col in ['RelativeHumidity', 'Temperature', 'TotalPrecipitation',
-                    'WindDirection', 'WindSpeed',
+                    'WindDirection', 'WindSpeed', 'MIP',
+                    'availableCapacity', 'unavailableCapacity',
                     'CloudCover', 'SolarDownwardRadiation', 'Temperature']:
     
             new_col = col + "_diff"
@@ -457,7 +462,7 @@ class Preprocessing:
 class FeatureEngineerer:
     def __init__(self, data, label:str = "Solar_MWh_credit", labels_to_remove:list = ["Solar_MWh_credit", "Wind_MWh_credit"], 
                  columns_to_ohe:list = list(), train_ratio:float = 0.7, val_ratio:float = 0.2, test_ratio:float = 0.1, scaler:str = "standard"):
-        assert(train_ratio + val_ratio + test_ratio == 1, "Train, validation and test data ratio can only equal to 1 as a sum.")
+        assert train_ratio + val_ratio + test_ratio == 1, "Train, validation and test data ratio can only equal to 1 as a sum."
 
         self.label = label
         if type(labels_to_remove) != type(list()):
@@ -503,7 +508,7 @@ class FeatureEngineerer:
                 if column not in data.columns:
                     self.columns_to_ohe.remove(column)
 
-        if len(columns_to_ohe) > 0:
+        if len(columns_to_ohe) > 1:
             self.ohe = OneHotEncoder()
             self.X_train[columns_to_ohe] = self.ohe.fit_transform(self.X_train[columns_to_ohe])
             self.X_test[columns_to_ohe] = self.ohe.transform(self.X_test[columns_to_ohe])        
