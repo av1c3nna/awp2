@@ -199,11 +199,7 @@ class Preprocessing:
         df_energy["dtm"] = pd.to_datetime(df_energy["dtm"])
         df_energy = df_energy.sort_values("dtm")
 
-        # Group by year, month, and hour, then calculate the mean
-        grouped_means = df_energy.groupby([df_energy.dtm.dt.year, df_energy.dtm.dt.month, df_energy.dtm.dt.hour]).transform('mean')
-
-        # Fill missing values in df_energy with the corresponding grouped means
-        df_energy = df_energy.fillna(grouped_means)
+        df_energy = self.handle_missing_data(df_energy, "dtm")
 
         # convert MW to MWh (30min periods --> multiply by 0.5)
         for col in ["Solar_MW", "Wind_MW"]:
@@ -213,14 +209,7 @@ class Preprocessing:
         df_energy.rename(columns = {"Solar_MW": "Solar_MWh_credit", "Wind_MW": "Wind_MWh"}, inplace = True)
         df_energy.drop(["Wind_MWh"], axis = 1, inplace = True)
 
-        df_energy["unused_Solar_capacity_mwp"] = df_energy["Solar_installedcapacity_mwp"] = df_energy["Solar_capacity_mwp"]
-
-        for col in ["month", "day", "dayofweek", "hour"]:
-            time_col_sin = "sin_" + col
-            time_col_cos = "cos_" + col
-
-            df_energy[time_col_sin] = df_energy.dtm.apply(self.get_cycles, args = (0, col))
-            df_energy[time_col_cos] = df_energy.dtm.apply(self.get_cycles, args = (1, col))
+        #df_energy["unused_Solar_capacity_mwp"] = df_energy["Solar_installedcapacity_mwp"] = df_energy["Solar_capacity_mwp"]
 
         df_energy = df_energy.drop_duplicates()
 
@@ -241,7 +230,7 @@ class Preprocessing:
 
     def preprocess_geo_data(self, df):
         df = self.clean_geo_data(df)
-        df = self.handle_missing_data(df)
+        df = self.handle_missing_data(df, "valid_time")
         df = self.add_statistical_data(df)
         df = self.add_other_features(df)
 
@@ -292,7 +281,7 @@ class Preprocessing:
         return df
 
 
-    def handle_missing_data(self, df):
+    def handle_missing_data(self, df, column_to_groupby:str):
 
         # Remove data points with at least 80% of the features containing missing values.
         df = df[df.isna().sum(axis=1) <= 0.8]
@@ -300,9 +289,10 @@ class Preprocessing:
         # Fill missing values by using the mean of other data points at a similiar time (same year, month and hour)
         mask = df.isna().any(axis=1)
         # Group by year, month, and hour, then calculate the mean
-        grouped_means = df.groupby([df.valid_time.dt.year, df.valid_time.dt.month, df.valid_time.dt.hour]).transform('mean')
+        # NACH LONGITUDE UND LATITUDE DAZU AGGREGIEREN, VOR AGGREGIERUNG NACH REF UND VALID
+        grouped_means = df.groupby([df[column_to_groupby].dt.year, df[column_to_groupby].dt.month, df[column_to_groupby].dt.hour]).transform('mean')
         # Fill missing values using the grouped means
-        df[mask] = df[mask].fillna(grouped_means)
+        df.loc[mask, :] = df.loc[mask, :].fillna(grouped_means)
         
         return df
 
@@ -372,6 +362,14 @@ class Preprocessing:
         if "Temperature" in df.columns:
             df["Temperature_range"] = df["Temperature_max"] - df["Temperature_min"]
 
+
+        for col in ["month", "day", "dayofweek", "hour"]:
+            time_col_sin = "sin_" + col
+            time_col_cos = "cos_" + col
+
+            df[time_col_sin] = df["valid_time"].apply(self.get_cycles, args = (0, col))
+            df[time_col_cos] = df["valid_time"].apply(self.get_cycles, args = (1, col))
+
         return df
     
 
@@ -393,7 +391,6 @@ class Preprocessing:
         assert("datetime" in str(weather_data_1[aggregate_by].dtype), f"First input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime.")
         assert("datetime" in str(weather_data_2[aggregate_by].dtype), f"Second input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime.")
 
-        # NACH VALID UND REFERENCE TIME AGGREGIEREN
         if aggregate_by_reference_time_too:
             weather_data = pd.concat([weather_data_1, weather_data_2]).groupby(["reference_time", aggregate_by]).mean()
         else:
@@ -443,8 +440,7 @@ class Preprocessing:
         """Add features based on the difference of values between data points."""
 
         for col in ['RelativeHumidity', 'Temperature', 'TotalPrecipitation',
-                    'WindDirection', 'WindSpeed', 'MIP',
-                    'availableCapacity', 'unavailableCapacity',
+                    'WindDirection', 'WindSpeed',
                     'CloudCover', 'SolarDownwardRadiation', 'Temperature']:
     
             new_col = col + "_diff"
@@ -507,7 +503,7 @@ class FeatureEngineerer:
                 if column not in data.columns:
                     self.columns_to_ohe.remove(column)
 
-        if len(columns_to_ohe) > 1:
+        if len(columns_to_ohe) > 0:
             self.ohe = OneHotEncoder()
             self.X_train[columns_to_ohe] = self.ohe.fit_transform(self.X_train[columns_to_ohe])
             self.X_test[columns_to_ohe] = self.ohe.transform(self.X_test[columns_to_ohe])        
