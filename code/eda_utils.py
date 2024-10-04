@@ -78,7 +78,7 @@ def show_histograms(plot):
         # Add the histogram
         plot[column].hist(ax=axes[i], # Define on which ax we're working on
                         edgecolor='white', # Color of the border
-                        color='#69b3a2' # Color of the bins
+                        color='#69b3a2', # Color of the bins
                     )
         
         # Add title and axis label
@@ -93,15 +93,14 @@ def show_histograms(plot):
     plt.show()
 
 
-
-
 def combine_histograms(dfs, names):
     """
     Funktion, die Histogramme der gleichen Spalten aus mehreren DataFrames auf dem gleichen Plot kombiniert.
     :param dfs: Liste von DataFrames
     """
     # Wähle die Spalten, die verglichen werden sollen (in diesem Fall alle nach der zweiten Spalte)
-    columns = dfs[0].columns[2:]
+    # columns = dfs[0].columns[2:]
+    columns = dfs[0].columns
 
     # Erstelle die Subplots für jede Spalte
     fig, axes = plt.subplots(nrows=1, ncols=len(columns), figsize=(20, 6))
