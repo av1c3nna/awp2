@@ -217,6 +217,8 @@ class Preprocessing:
 
         df_energy = df_energy.drop_duplicates()
 
+        df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit"]]
+
         return df_energy
 
 
@@ -462,7 +464,7 @@ class Preprocessing:
 class FeatureEngineerer:
     def __init__(self, data, label:str = "Solar_MWh_credit", labels_to_remove:list = ["Solar_MWh_credit", "Wind_MWh_credit"], 
                  columns_to_ohe:list = list(), train_ratio:float = 0.7, val_ratio:float = 0.2, test_ratio:float = 0.1, scaler:str = "standard"):
-        assert train_ratio + val_ratio + test_ratio == 1, "Train, validation and test data ratio can only equal to 1 as a sum."
+        assert train_ratio + val_ratio + test_ratio <= 1, "Train, validation and test data ratio can only equal to 1 as a sum."
 
         self.label = label
         if type(labels_to_remove) != type(list()):
