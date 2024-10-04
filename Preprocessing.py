@@ -290,7 +290,7 @@ class Preprocessing:
     def handle_missing_data(self, df):
 
         # Remove data points with at least 80% of the features containing missing values.
-        df = df[df.isna().sum(axis=1) <= 0.8]
+        df = df[df.isna().sum(axis=1)/df.shape[1] <= 0.8]
 
         # Fill missing values by using the mean of other data points at a similiar time (same year, month and hour)
         mask = df.isna().any(axis=1)
@@ -396,7 +396,7 @@ class Preprocessing:
         assert "datetime" in str(weather_data_1[aggregate_by].dtype), f"First input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime."
         assert "datetime" in str(weather_data_2[aggregate_by].dtype), f"Second input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime."
 
-        # NACH VALID UND REFERENCE TIME AGGREGIEREN
+        # merge forecasts from different locations to one aggregated value per reference and valid time
         if aggregate_by_reference_time_too:
             weather_data = pd.concat([weather_data_1, weather_data_2]).groupby(["reference_time", aggregate_by]).mean()
         else:
@@ -404,6 +404,10 @@ class Preprocessing:
 
             if "reference_time" in weather_data.columns:
                 weather_data = weather_data.drop(["reference_time"], axis = 1)
+
+        # merge forecasts on valid time
+        # resampling will lead to every 2nd row being empty, thus, an interpolation is required
+        weather_data = weather_data.resample("30min", level = 1).mean().interpolate("time")
 
         return weather_data
         
@@ -427,17 +431,11 @@ class Preprocessing:
         assert "datetime" in str(energy_outage_data[right_merge].dtype), f"Second input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime."
 
         merged_data = geo_data.merge(energy_outage_data, left_on = left_merge, right_on = right_merge, how = "right")
-        # fill na values (geo data has only 60min intervals, thus every second 30min interval will be empty).
-        merged_data = merged_data.interpolate("linear")
+        merged_data = merged_data.drop_duplicates().groupby(right_merge).mean()
         merged_data = merged_data.dropna(axis = 0)
-        merged_data.set_index(right_merge, inplace = True)
-        merged_data = merged_data.resample("30min").mean()
 
         if left_merge in merged_data.columns:
             merged_data.drop(columns = [left_merge], axis = 1, inplace = True)
-
-        merged_data = merged_data.sort_index()
-        merged_data.drop(["reference_time"], axis = 1, inplace = True)
 
         return merged_data
     
