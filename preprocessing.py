@@ -231,123 +231,156 @@ class Preprocessing:
         return energy_with_outages
 
 
-    def preprocess_geo_data(self, df):
-        df = self.clean_geo_data(df)
-        # df = self.handle_missing_data(df)
-        # df = self.add_statistical_data(df)
-        # df = self.add_other_features(df)
+    def preprocess_geo_data(self, df1, df2):
+        df1, df2 = self.clean_geo_data(df1, df2)
+        df = self.merge_weather_stations_data(df1, df2)
+        df = self.add_statistical_data(df)
+        df = self.add_other_features(df)
 
-        # if "index" in df.columns:
-        #     df.drop(["index"], axis = 1, inplace = True)
-
-        return df
-
-
-    def clean_geo_data(self, df):
-        # reset the index (reference_time, valid_time, latitude, longitude)
-        df.reset_index(inplace = True)
-        # rename the columns properly
-        # df = df.rename(columns = {"level_0": "ref_time", "level_1": "val_time"})
         if "index" in df.columns:
-            df.drop(columns = ["index"], axis = 1, inplace = True)
-        new_cols = {"level_0": "ref_time",
-                    "level_1": "val_time",
-                    "latitude": "lat",
-                    "longitude": "long",
-                    "RelativeHumidity": "rel_hum", 
-                    "Temperature": "temp", 
-                    "TotalPrecipitation": "total_prec",
-                    "WindDirection" : "wind_dir",
-                    "WindDirection:100": "wind_dir_100",
-                    "WindSpeed": "wind_speed",
-                    "WindSpeed:100" : "wind_speed_100",
-                    "CloudCover": "cloud_cover",
-                    "SolarDownwardRadiation": "solar_down_rad"}
-        for col in new_cols.keys():
-            if col in df.columns:
-                df = df.rename(columns = {col: new_cols[col]})
-        # convert the datetime information to the right format
-        df["ref_time"] = pd.to_datetime(df.ref_time).dt.tz_localize("UTC")
-        df["forecast_horizon"] = df["val_time"]
-        df["val_time"] = df["ref_time"] + pd.to_timedelta(df["val_time"], unit = "hour")
-        # remove forecasts which extend beyond the day ahead, since they will be outdated the next day anyway
-        df = df[(df["val_time"] - df["ref_time"]).div(pd.Timedelta("1h")) < 50]
-        # some data points have a miscalculation at their coordinates (e.g. ncep_gfs_demand). The actual coordinates can be identified by their value of the feature "point"
-        df = df.drop_duplicates()
+            df.drop(["index"], axis = 1, inplace = True)
 
-        df ["week"] = int(df["val_time"].dt.isocalendar().week)
-        for column in df.columns:
-            q1 = df[column].quantile(0.25)
-            q3 = df[column].quantile(0.75)
-            iqr = q3 - q1
+        return df
 
-            lower_bound = q1 - 1.5*iqr
-            upper_bound = q3 + 1.5*iqr
+    def clean_geo_data(self, df1, df2):
 
-            df[column] = df[column].where((df[column] >= lower_bound) | (df[column] <= upper_bound),
-                                           other=np.nan)
-            df[column] = df.groupby(["lat", "long", "week"])[column].transform(lambda x: x.fillna(x.mean()))
+        cleaned_dfs = []
+        for df in [df1, df2]:
 
+            df = df.reset_index()
+            if "point" in df.columns:
+                df = df.drop("point", axis=1)
 
-        df.loc[df.long > 90, "long"] -= 360
-        df.loc[df.long < -90, "long"] += 360
+            # rename the columns properly
+            new_cols = {"level_0": "ref_time",
+                        "level_1": "val_time",
+                        "latitude": "lat",
+                        "longitude": "long",
+                        "RelativeHumidity": "rel_hum",
+                        "Temperature": "temp",
+                        "TotalPrecipitation": "total_prec",
+                        "WindDirection" : "wind_dir",
+                        "WindDirection:100": "wind_dir_100",
+                        "WindSpeed": "wind_speed",
+                        "WindSpeed:100" : "wind_speed_100",
+                        "CloudCover": "cloud_cover",
+                        "SolarDownwardRadiation": "solar_down_rad"}
+            for col in new_cols.keys():
+                if col in df.columns:
+                    df = df.rename(columns = {col: new_cols[col]})
 
-        # there are anomalies of the solar down radiation being above 1000 in a short time period. The maximum threshold is to be believed to be about 1000 W/m^2
-        # source: https://www.researchgate.net/post/Are_there_minimum_and_maximum_threshold_of_solar_irradiance
-        if "solar_down_rad" in df.columns:
-            df = df[df["solar_down_rad"] <= 1000]
-            df.loc[df["solar_down_rad"] < 0, "solar_down_rad"] = 0
-            # convert W/m^2 to kW/km^2
-            # df["solar_down_rad"] = df["solar_down_rad"] * 1000
+            # convert the datetime information to the right format
+            df["ref_time"] = pd.to_datetime(df.ref_time).dt.tz_localize("UTC")
+            df["forecast_horizon"] = df["val_time"]
+            df["val_time"] = df["ref_time"] + pd.to_timedelta(df["val_time"], unit = "hour")
 
-        if "rel_hum" in df.columns:
-            df.loc[df["rel_hum"] > 100, "rel_hum"] = 100
-            df.loc[df["rel_hum"] < 0, "rel_hum"] = 0
+            # remove forecasts which extend beyond the day ahead, since they will be outdated the next day anyway
+            df = df[(df["val_time"] - df["ref_time"]).div(pd.Timedelta("1h")) < 50]
+
+            # drop duplicate rows
+            df = df.drop_duplicates()
+
+            # adjust invalid values
+            df.loc[df.long > 90, "long"] -= 360
+            df.loc[df.long < -90, "long"] += 360
+
+            # there are anomalies of the solar down radiation being above 1000 in a short time period. The maximum threshold is to be believed to be about 1000 W/m^2
+            # source: https://www.researchgate.net/post/Are_there_minimum_and_maximum_threshold_of_solar_irradiance
+            if "solar_down_rad" in df.columns:
+                df = df[df["solar_down_rad"] <= 1000]
+                df.loc[df["solar_down_rad"] < 0, "solar_down_rad"] = 0
+                # convert W/m^2 to kW/km^2
+                # df["solar_down_rad"] = df["solar_down_rad"] * 1000
+
+            if "rel_hum" in df.columns:
+                df.loc[df["rel_hum"] > 100, "rel_hum"] = 100
+                df.loc[df["rel_hum"] < 0, "rel_hum"] = 0
+                
+            if "total_prec" in df.columns:
+                df.loc[df["total_prec"] < 0, "total_prec"] = 0
+
+            # remove outliers
+            df["year"] = df["val_time"].dt.year
+            df["month"] = df["val_time"].dt.month
+            df["day"] = df["val_time"].dt.day
+            df["hour"] = df["val_time"].dt.hour
+
+            features = list(df.columns)
+            for i in ["ref_time", "val_time", "lat", "long", "month", "day", "hour", "forecast_horizon"]:
+                if i in features:
+                    features.remove(i)
+
+            for column in features:
+                q1 = df[column].quantile(0.25)
+                q3 = df[column].quantile(0.75)
+                iqr = q3 - q1
+
+                lower_bound = q1 - 1.5*iqr
+                upper_bound = q3 + 1.5*iqr
+
+                df[column] = df[column].where((df[column] >= lower_bound) | (df[column] <= upper_bound),
+                                            other=np.nan)
+                df[column] = df.groupby(["year", "month", "day", "hour"])[column].transform(lambda x: x.fillna(x.mean()))
             
-        if "total_prec" in df.columns:
-            df.loc[df["total_prec"] < 0, "total_prec"] = 0
+            df = df.drop(["year", "month", "day", "hour"], axis=1)
+            
+            
+            # remove nan values
+            """
+            # Remove data points with at least 80% of the features containing missing values.
+            df = df[df.isna().sum(axis=1) <= 0.8]
+
+            # Fill missing values by using the mean of other data points at a similiar time (same year, month and hour)
+            mask = df.isna().any(axis=1)
+            # Group by year, month, and hour, then calculate the mean
+            grouped_means = df.groupby([df.valid_time.dt.year, df.valid_time.dt.month, df.valid_time.dt.hour]).transform('mean')
+            # Fill missing values using the grouped means
+            df[mask] = df[mask].fillna(grouped_means)
+            """
+            cleaned_dfs.append(df)
+
+        df1 = cleaned_dfs[0]
+        df2 = cleaned_dfs[1]
+
+        return df1, df2
 
 
-        df = df.groupby(["ref_time", "val_time"]).mean().reset_index()
-        df.drop(columns = ["lat", "long"], axis = 1, inplace = True)
+    def merge_weather_stations_data(self, weather_data_1, weather_data_2, aggregate_by:str = "val_time", aggregate_by_reference_time_too:bool = True):
+        """Merge the weather data from the DWD and NCEP weather stations."""
 
-        if "point" in df.columns:
-            df.drop(["point"], axis = 1, inplace = True)
+        assert aggregate_by in weather_data_1.columns, f"Dimension {aggregate_by} to aggregate by was not found in the first dataset."
+        assert aggregate_by in weather_data_2.columns, f"Dimension {aggregate_by} to aggregate by was not found in the second dataset."
+        assert "datetime" in str(weather_data_1[aggregate_by].dtype), f"First input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime."
+        assert "datetime" in str(weather_data_2[aggregate_by].dtype), f"Second input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime."
 
-        return df
+        # merge forecasts from different locations to one aggregated value per reference and valid time
+        if aggregate_by_reference_time_too:
+            weather_data = pd.concat([weather_data_1, weather_data_2]).groupby(["ref_time", aggregate_by]).mean().drop(["lat", "long"], axis=1)
+        else:
+            weather_data = pd.concat([weather_data_1, weather_data_2]).groupby([aggregate_by]).mean().drop(["ref_time", "lat", "long"])
 
+        # resampling will lead to every 2nd row being empty, thus, an interpolation is required
+        weather_data = weather_data.resample("30min", level = 1).mean().interpolate("time").reset_index()
 
-    def handle_missing_data(self, df):
-
-        # Remove data points with at least 80% of the features containing missing values.
-        df = df[df.isna().sum(axis=1) <= 0.8]
-
-        # Fill missing values by using the mean of other data points at a similiar time (same year, month and hour)
-        mask = df.isna().any(axis=1)
-        # Group by year, month, and hour, then calculate the mean
-        grouped_means = df.groupby([df.valid_time.dt.year, df.valid_time.dt.month, df.valid_time.dt.hour]).transform('mean')
-        # Fill missing values using the grouped means
-        df[mask] = df[mask].fillna(grouped_means)
-        
-        return df
+        return weather_data
 
 
     def add_statistical_data(self, df):
-
-        df_std = df.drop(["forecast_horizon"], axis = 1).set_index("valid_time").resample("24h").std().sort_values("valid_time").drop(["reference_time"], axis = 1)
-        df_mean = df.drop(["forecast_horizon"], axis = 1).set_index("valid_time").resample("24h").mean().sort_values("valid_time").drop(["reference_time"], axis = 1)
-        df_min = df.drop(["forecast_horizon"], axis = 1).set_index("valid_time").resample("24h").min().sort_values("valid_time").drop(["reference_time"], axis = 1)
-        df_max = df.drop(["forecast_horizon"], axis = 1).set_index("valid_time").resample("24h").max().sort_values("valid_time").drop(["reference_time"], axis = 1)
+        
+        df_std = df.drop(["forecast_horizon"], axis = 1).set_index("val_time").resample("24h").std().sort_values("val_time")
+        df_mean = df.drop(["forecast_horizon"], axis = 1).set_index("val_time").resample("24h").mean().sort_values("val_time")
+        df_min = df.drop(["forecast_horizon"], axis = 1).set_index("val_time").resample("24h").min().sort_values("val_time")
+        df_max = df.drop(["forecast_horizon"], axis = 1).set_index("val_time").resample("24h").max().sort_values("val_time")
 
         df_std.columns = [x + "_std" for x in df_std.columns]
         df_mean.columns = [x + "_mean" for x in df_mean.columns]
         df_min.columns = [x + "_min" for x in df_min.columns]
         df_max.columns = [x + "_max" for x in df_max.columns]
 
-        df = df.sort_values("valid_time")
+        df = df.sort_values("val_time")
 
         for data in [df_std, df_mean, df_min, df_max]:
-            df = pd.merge(df, data, on = "valid_time", how = "left")
+            df = pd.merge(df, data, on = "val_time", how = "left")
 
         # Convert pandas dataframe to dask dataframe to enable a faster operation
         ddf = dd.from_pandas(df, npartitions=10)
@@ -402,8 +435,8 @@ class Preprocessing:
             time_col_sin = "sin_" + col
             time_col_cos = "cos_" + col
 
-            df[time_col_sin] = df["valid_time"].apply(self.get_cycles, args = (0, col))
-            df[time_col_cos] = df["valid_time"].apply(self.get_cycles, args = (1, col))
+            df[time_col_sin] = df["val_time"].apply(self.get_cycles, args = (0, col))
+            df[time_col_cos] = df["val_time"].apply(self.get_cycles, args = (1, col))
 
         return df
     
@@ -417,25 +450,6 @@ class Preprocessing:
         data = np.deg2rad(data)
         return math.cos(data)
     
-
-    def merge_weather_stations_data(self, weather_data_1, weather_data_2, aggregate_by:str = "valid_time", aggregate_by_reference_time_too:bool = True):
-        """Merge the weather data from the DWD and NCEP weather stations."""
-
-        assert aggregate_by in weather_data_1.columns, f"Dimension {aggregate_by} to aggregate by was not found in the first dataset."
-        assert aggregate_by in weather_data_2.columns, f"Dimension {aggregate_by} to aggregate by was not found in the second dataset."
-        assert "datetime" in str(weather_data_1[aggregate_by].dtype), f"First input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime."
-        assert "datetime" in str(weather_data_2[aggregate_by].dtype), f"Second input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime."
-
-        # NACH VALID UND REFERENCE TIME AGGREGIEREN
-        if aggregate_by_reference_time_too:
-            weather_data = pd.concat([weather_data_1, weather_data_2]).groupby(["reference_time", aggregate_by]).mean()
-        else:
-            weather_data = pd.concat([weather_data_1, weather_data_2]).groupby([aggregate_by]).mean()
-
-            if "reference_time" in weather_data.columns:
-                weather_data = weather_data.drop(["reference_time"], axis = 1)
-
-        return weather_data
         
 
     def merge_geo_energy_outage_data(self, geo_data, energy_outage_data, left_merge:str = "valid_time", right_merge:str = "dtm"):
