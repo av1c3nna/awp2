@@ -292,10 +292,10 @@ class Preprocessing:
         if "total_prec" in df.columns:
             df.loc[df["total_prec"] < 0, "total_prec"] = 0
 
+        df = self.remove_outliers(df)
+
         df = df.groupby(["ref_time", "val_time"]).mean().reset_index()
         df.drop(columns = ["lat", "long"], axis = 1, inplace = True)
-
-        df = self.remove_outliers(df)
 
         return df
     
