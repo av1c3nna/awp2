@@ -236,6 +236,8 @@ class Preprocessing:
         df = self.clean_geo_data(df)
         df = self.add_statistical_data(df)
         df = self.add_other_features(df)
+        # some new features will have NaN value, e.g. due to not enough past values to calculate a rolling mean
+        df = df.bfill()
 
         if "index" in df.columns:
             df.drop(["index"], axis = 1, inplace = True)
@@ -338,7 +340,12 @@ class Preprocessing:
             df['lat_lon_combination'] = df['lat'].astype(str) + '_' + df['long'].astype(str)
             cols_with_nan = df.columns[df.isna().any()].tolist()
             
-            df[cols_with_nan] = df.groupby(['forecast_horizon', 'lat_lon_combination'])[cols_with_nan].transform(lambda group: group.interpolate(method='linear'))
+            for col in cols_with_nan:
+                # Group and interpolate each column individually
+                df[col] = df.groupby(['forecast_horizon', 'lat_lon_combination'])[col].transform(
+                    lambda group: group.interpolate(method='linear') if group.notna().sum() > 1 else group
+                )
+
             df.drop("lat_lon_combination", axis=1, inplace=True)
             mask = df.isna().any(axis=1)
         
