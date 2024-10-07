@@ -86,6 +86,29 @@ class Preprocessing:
         self.irrelevant_features = list()
 
 
+    def perform_preprocessing_pipeline(self, geo_data_dict:dict, 
+                                       aggregate_by:str = "val_time", aggregate_by_ref_time_too:bool = True,
+                                       deployment:bool = True, energy_data_dict:dict = dict(), left_merge:str = "val_time", right_merge:str = "dtm"):
+        weather_data = list()
+        extractor = FileExtractor()
+        for file_name_pattern, file_path in geo_data_dict.items():
+            weather_data.append(extractor.combine_files(file_path, file_name_pattern, ".nc"))
+
+        for index in range(0, len(weather_data)):
+            weather_data[index] = self.preprocess_geo_data(weather_data[index])
+
+        df = self.merge_weather_stations_data(weather_data_1 = weather_data[0], weather_data_2 = weather_data[1], aggregate_by = aggregate_by, aggregate_by_ref_time_too = aggregate_by_ref_time_too)
+        df = self.add_difference_features(df)
+
+        if deployment == False:
+            key = next(iter(energy_data_dict))
+            energy_df = extractor.combine_files(energy_data_dict[key], key, ".csv")
+            energy_df = self.preprocess_energy_data(energy_df)
+            df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge)
+
+        return df
+
+
     def cyclic_sin(self, n):
         theta = 2 * pi * n
         return sin(theta)
@@ -238,6 +261,7 @@ class Preprocessing:
         df = self.add_other_features(df)
         # some new features will have NaN value, e.g. due to not enough past values to calculate a rolling mean
         df = df.bfill()
+        df = df.ffill()
 
         if "index" in df.columns:
             df.drop(["index"], axis = 1, inplace = True)
@@ -325,12 +349,12 @@ class Preprocessing:
 
             df[column] = df[column].where((df[column] >= lower_bound) | (df[column] <= upper_bound),
                                             other=np.nan)
-            df[column] = df.groupby(["year", "month", "day", "hour"])[column].transform(lambda x: x.fillna(x.mean()))
+            group_means = df.groupby(["year", "month", "day", "hour"])[column].transform("mean")
+            df[column] = df[column].fillna(group_means)
             
         df = df.drop(["year", "month", "day", "hour"], axis=1)
 
         return df
-    
 
 
     def handle_missing_data(self, df, performance = False):
