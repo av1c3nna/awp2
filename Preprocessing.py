@@ -281,6 +281,10 @@ class Preprocessing:
         df = df.rename(columns = 
                        {"level_0": "ref_time",
                         "level_1": "val_time",
+                        "reference_datetime": "ref_time",
+                        "ref_datetime":"ref_time",
+                        "valid_datetime": "val_time",
+                        "valid_time": "val_time",
                         "latitude": "lat",
                         "longitude": "long",
                         "RelativeHumidity": "rel_hum",
@@ -294,12 +298,29 @@ class Preprocessing:
                         "SolarDownwardRadiation": "solar_down_rad"})
         
         # convert the datetime information to the right format
-        df["ref_time"] = pd.to_datetime(df.ref_time).dt.tz_localize("UTC")
-        df["forecast_horizon"] = df["val_time"]
-        df["val_time"] = df["ref_time"] + pd.to_timedelta(df["val_time"], unit = "hour")
+
+        df["ref_time"] = pd.to_datetime(df["ref_time"])
+
+        if df["ref_time"].dt.tz is None:
+            df["ref_time"] = df["ref_time"].dt.tz_localize("UTC")
+
+        if not pd.api.types.is_datetime64_any_dtype(df['val_time']):
+            if df["val_time"].max() < 1000:
+                df["forecast_horizon"] = df["val_time"]
+                df["val_time"] = df["ref_time"] + pd.to_timedelta(df["val_time"], unit = "hour")
+            else:
+                df["val_time"] = pd.to_datetime(df["val_time"])
+                if df["val_time"].dt.tz is None:
+                    df["val_time"] = df["val_time"].dt.tz_localize("UTC")
+                df["forecast_horizon"] = (df["val_time"] - df["ref_time"]).div(pd.Timedelta("1h"))
+
         # remove forecasts which extend beyond the day ahead, since they will be outdated the next day anyway
         df = df[(df["val_time"] - df["ref_time"]).div(pd.Timedelta("1h")) < 50]
         # some data points have a miscalculation at their coordinates (e.g. ncep_gfs_demand). The actual coordinates can be identified by their value of the feature "point"
+
+        df["long"] = df["long"].astype(float)
+        df["lat"] = df["lat"].astype(float)
+
         df.loc[df.long > 90, "long"] -= 360
         df.loc[df.long < -90, "long"] += 360
 
@@ -327,34 +348,66 @@ class Preprocessing:
         return df
     
 
-    def remove_outliers(self, df):
-        # remove outliers
-        df["year"] = df["val_time"].dt.year
-        df["month"] = df["val_time"].dt.month
-        df["day"] = df["val_time"].dt.day
-        df["hour"] = df["val_time"].dt.hour
+    # def remove_outliers(self, df):
+    #     # remove outliers
+    #     df["year"] = df["val_time"].dt.year
+    #     df["month"] = df["val_time"].dt.month
+    #     df["day"] = df["val_time"].dt.day
+    #     df["hour"] = df["val_time"].dt.hour
 
+    #     features = list(df.columns)
+    #     for i in ["ref_time", "val_time", "lat", "long", "month", "day", "hour", "forecast_horizon"]:
+    #         if i in features:
+    #             features.remove(i)
+
+    #     for column in features:
+    #         q1 = df[column].quantile(0.25)
+    #         q3 = df[column].quantile(0.75)
+    #         iqr = q3 - q1
+
+    #         lower_bound = q1 - 1.5*iqr
+    #         upper_bound = q3 + 1.5*iqr
+
+    #         df[column] = df[column].where((df[column] >= lower_bound) | (df[column] <= upper_bound),
+    #                                         other=np.nan)
+    #         group_means = df.groupby(["year", "month", "day", "hour"])[column].transform("mean")
+    #         df[column] = df[column].fillna(group_means)
+            
+    #     df = df.drop(["year", "month", "day", "hour"], axis=1)
+
+    #     return df
+
+
+    def remove_outliers(self, df, replace=True):
+        """Removes or replaces outliers of the weather data."""
         features = list(df.columns)
-        for i in ["ref_time", "val_time", "lat", "long", "month", "day", "hour", "forecast_horizon"]:
+        for i in ["ref_time", "val_time", "lat", "long", "forecast_horizon"]:
             if i in features:
                 features.remove(i)
-
+                
         for column in features:
-            q1 = df[column].quantile(0.25)
-            q3 = df[column].quantile(0.75)
-            iqr = q3 - q1
+            df[column] = df.groupby("val_time")[column].transform(lambda group: self.remove_outliers_group(group, replace))
 
-            lower_bound = q1 - 1.5*iqr
-            upper_bound = q3 + 1.5*iqr
-
-            df[column] = df[column].where((df[column] >= lower_bound) | (df[column] <= upper_bound),
-                                            other=np.nan)
-            group_means = df.groupby(["year", "month", "day", "hour"])[column].transform("mean")
-            df[column] = df[column].fillna(group_means)
-            
-        df = df.drop(["year", "month", "day", "hour"], axis=1)
+        if not replace:
+            df = df.dropna()
 
         return df
+    
+    def remove_outliers_group(self, group, replace):
+        """Replaces outliers within a group object."""
+        Q1 = group.quantile(0.25)
+        Q3 = group.quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+
+        if replace:
+            mean = group[(group >= lower_bound) & (group <= upper_bound)].mean()
+            group = group.where((group >= lower_bound) & (group <= upper_bound), mean)
+        else:
+            group = group.where((group >= lower_bound) & (group <= upper_bound), np.nan)
+
+        return group
 
 
     def handle_missing_data(self, df, performance = False):
