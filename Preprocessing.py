@@ -293,6 +293,7 @@ class Preprocessing:
             df.loc[df["total_prec"] < 0, "total_prec"] = 0
 
         df = self.remove_outliers(df)
+        df = self.handle_missing_data(df)
 
         df = df.groupby(["ref_time", "val_time"]).mean().reset_index()
         df.drop(columns = ["lat", "long"], axis = 1, inplace = True)
@@ -325,6 +326,36 @@ class Preprocessing:
             df[column] = df.groupby(["year", "month", "day", "hour"])[column].transform(lambda x: x.fillna(x.mean()))
             
         df = df.drop(["year", "month", "day", "hour"], axis=1)
+
+        return df
+    
+
+
+    def handle_missing_data(self, df, performance = False):
+        
+        if not performance:
+            
+            df['lat_lon_combination'] = df['lat'].astype(str) + '_' + df['long'].astype(str)
+            cols_with_nan = df.columns[df.isna().any()].tolist()
+            
+            df[cols_with_nan] = df.groupby(['forecast_horizon', 'lat_lon_combination'])[cols_with_nan].transform(lambda group: group.interpolate(method='linear'))
+            df.drop("lat_lon_combination", axis=1, inplace=True)
+            mask = df.isna().any(axis=1)
+        
+            if mask.any():
+                # Gruppiere nach Jahr, Monat und Stunde und berechne den Mittelwert für numerische Spalten
+                grouped_means = df.groupby([df.val_time.dt.year, df.val_time.dt.month, df.val_time.dt.hour])[cols_with_nan].transform('mean')
+
+                # Fülle die verbliebenen NaN-Werte mit den berechneten Mittelwerten
+                df[mask] = df[mask].fillna(grouped_means)
+
+        if performance:
+
+            mask = df.isna().any(axis=1)
+            # Group by year, month, and hour, then calculate the mean
+            grouped_means = df.groupby([df.val_time.dt.year, df.val_time.dt.month, df.val_time.dt.hour]).transform('mean')
+            # Fill missing values using the grouped means
+            df[mask] = df[mask].fillna(grouped_means)
 
         return df
     
