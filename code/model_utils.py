@@ -6,6 +6,19 @@ from sklearn.linear_model import QuantileRegressor
 from sklearn.utils.fixes import parse_version, sp_version
 import joblib
 
+def pinball(y, q, alpha):
+    return (y - q) * alpha * (y >= q) + (q - y) * (1 - alpha) * (y < q)
+
+def pinball_score(df, quantiles):
+    score = list()
+    for qu in quantiles:
+        # Berechne den Pinball Loss für jedes Quantil
+        score.append(pinball(y=df["true"],
+                             q=df[f"{qu}"],
+                             alpha=qu/100).mean())
+    return sum(score)/len(score)  # Durchschnittlicher Pinball Score
+
+
 # Base Model Class
 class BaseModel:
     def __init__(self, feature_engineerer, quantiles, model_save_dir, load_pretrained=False):
@@ -46,7 +59,6 @@ class XGBoostModel(BaseModel):
             "objective": "reg:quantileerror",
             "tree_method": "hist",
             "quantile_alpha": quantiles,
-            # Let's try not to overfit.
             "learning_rate": 0.04,
             "max_depth": 8,
         }
@@ -74,7 +86,7 @@ class XGBoostModel(BaseModel):
 
         # Training XGBoost model
         booster = xgb.train(
-            self.hyperparams,  # Pass the hyperparameters directly
+            self.hyperparams,  
             Xy_train,
             num_boost_round=250,
             early_stopping_rounds=10,
