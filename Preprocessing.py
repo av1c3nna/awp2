@@ -88,6 +88,7 @@ class Preprocessing:
 
     def perform_preprocessing_pipeline(self, geo_data_dict:dict, 
                                        aggregate_by:str = "val_time", aggregate_by_ref_time_too:bool = True,
+                                       fft:bool = False, columns_to_fft:list = ["temp_diff", "solar_down_rad_diff", "wind_speed_diff", "wind_speed_100_diff"],
                                        deployment:bool = True, energy_data_dict:dict = dict(), left_merge:str = "val_time", right_merge:str = "dtm"):
         weather_data = list()
         extractor = FileExtractor()
@@ -99,6 +100,9 @@ class Preprocessing:
 
         df = self.merge_weather_stations_data(weather_data_1 = weather_data[0], weather_data_2 = weather_data[1], aggregate_by = aggregate_by, aggregate_by_ref_time_too = aggregate_by_ref_time_too)
         df = self.add_difference_features(df)
+
+        if fft:
+            df = self.add_fft_features(df, columns_to_fft = columns_to_fft)
 
         if deployment == False:
             key = next(iter(energy_data_dict))
@@ -569,8 +573,8 @@ class Preprocessing:
         """Add features based on the difference of values between data points."""
 
         for col in ['rel_hum', 'temp', 'total_precipitation',
-                    'wind_direction', 'wind_speed',
-                    'cloud_cover', 'solar_downward_radiation']:
+                    'wind_direction', 'wind_speed', "wind_speed_100",
+                    'cloud_cover', 'solar_down_rad']:
     
             new_col = col + "_diff"
             if col in data.columns:
@@ -578,6 +582,17 @@ class Preprocessing:
 
         data.fillna(0, inplace = True)
         data = data[data.index != 0]
+
+        return data
+    
+
+    def add_fft_features(self, data, columns_to_fft:list = ["temp_diff", "solar_down_rad_diff", "wind_speed_diff", "wind_speed_100_diff"]):
+        """Perform a Fast Fourier Transformation (FFT) on selected features (defined in columns_to_fft). Apply a FFT for each unique date in the dataset (one FFT per day)."""
+        for column in columns_to_fft:
+            print(f"Apply FFT on {column}...")
+            if column in data.columns:
+                for date in data.groupby(data.index.date).max().index:
+                    data.loc[data.index.date == date, f"{column}_fft"] = np.abs(np.fft.fft(data.loc[data.index.date == date, f"{column}"]))
 
         return data
     
