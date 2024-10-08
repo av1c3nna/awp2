@@ -503,19 +503,19 @@ class Preprocessing:
             # add the altitude difference in wind speed
             df["wind_speed_altitude_diff"] = df["wind_speed_100"] - df["wind_speed"]
 
-        if "wind_direction" in df.columns:
-            df["wind_direction_sin"] = df["wind_direction"].apply(self.convert_wind_directions_to_sin)
-            df["wind_direction_cos"] = df["wind_direction"].apply(self.convert_wind_directions_to_cos)
-            df.drop(columns = ["wind_direction"], axis = 1, inplace = True)
+        if "wind_dir" in df.columns:
+            df["wind_dir_sin"] = df["wind_dir"].apply(self.convert_wind_directions_to_sin)
+            df["wind_dir_cos"] = df["wind_dir"].apply(self.convert_wind_directions_to_cos)
+            df.drop(columns = ["wind_dir"], axis = 1, inplace = True)
 
-        if "wind_direction_100" in df.columns:
-            df["wind_direction_100_sin"] = df["wind_direction_100"].apply(self.convert_wind_directions_to_sin)
-            df["wind_direction_100_cos"] = df["wind_direction_100"].apply(self.convert_wind_directions_to_cos)
-            df.drop(columns = ["wind_direction_100"], axis = 1, inplace = True)
+        if "wind_dir_100" in df.columns:
+            df["wind_dir_100_sin"] = df["wind_dir_100"].apply(self.convert_wind_directions_to_sin)
+            df["wind_dir_100_cos"] = df["wind_dir_100"].apply(self.convert_wind_directions_to_cos)
+            df.drop(columns = ["wind_dir_100"], axis = 1, inplace = True)
 
-        if "solar_downward_radiation" in df.columns:
-            df["solar_downward_radiation_range"] = df["solar_downward_radiation_max"] - df["solar_downward_radiation_min"]
-            df["interaction_solar_downward_radiation_temp"] = df["solar_downward_radiation"] * df["temp"]
+        if "solar_down_rad" in df.columns:
+            df["solar_down_rad_range"] = df["solar_down_rad_max"] - df["solar_down_rad_min"]
+            df["interaction_solar_down_rad_temp"] = df["solar_down_rad"] * df["temp"]
 
         if "temp" in df.columns:
             df["temp_range"] = df["temp_max"] - df["temp_min"]
