@@ -74,7 +74,6 @@ class FileExtractor:
                     all_dfs.append(df)
 
         df_total = pd.concat(all_dfs)
-        df_total = df_total.drop_duplicates()
 
         return df_total
     
@@ -85,6 +84,33 @@ class Preprocessing:
     def __init__(self, for_deployment:bool = False):
         self.for_deployment = for_deployment
         self.irrelevant_features = list()
+
+
+    def perform_preprocessing_pipeline(self, geo_data_dict:dict, 
+                                       aggregate_by:str = "val_time", aggregate_by_ref_time_too:bool = True,
+                                       fft:bool = False, columns_to_fft:list = ["temp_diff", "solar_down_rad_diff", "wind_speed_diff", "wind_speed_100_diff"],
+                                       deployment:bool = True, energy_data_dict:dict = dict(), left_merge:str = "val_time", right_merge:str = "dtm"):
+        weather_data = list()
+        extractor = FileExtractor()
+        for file_name_pattern, file_path in geo_data_dict.items():
+            weather_data.append(extractor.combine_files(file_path, file_name_pattern, ".nc"))
+
+        for index in range(0, len(weather_data)):
+            weather_data[index] = self.preprocess_geo_data(weather_data[index])
+
+        df = self.merge_weather_stations_data(weather_data_1 = weather_data[0], weather_data_2 = weather_data[1], aggregate_by = aggregate_by, aggregate_by_ref_time_too = aggregate_by_ref_time_too)
+        df = self.add_difference_features(df)
+
+        if fft:
+            df = self.add_fft_features(df, columns_to_fft = columns_to_fft)
+
+        if deployment == False:
+            key = next(iter(energy_data_dict))
+            energy_df = extractor.combine_files(energy_data_dict[key], key, ".csv")
+            energy_df = self.preprocess_energy_data(energy_df)
+            df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge)
+
+        return df
 
 
     def cyclic_sin(self, n):
@@ -213,16 +239,10 @@ class Preprocessing:
         df_energy.rename(columns = {"Solar_MW": "Solar_MWh_credit", "Wind_MW": "Wind_MWh"}, inplace = True)
         df_energy.drop(["Wind_MWh"], axis = 1, inplace = True)
 
-        df_energy["unused_Solar_capacity_mwp"] = df_energy["Solar_installedcapacity_mwp"] = df_energy["Solar_capacity_mwp"]
-
-        for col in ["month", "day", "dayofweek", "hour"]:
-            time_col_sin = "sin_" + col
-            time_col_cos = "cos_" + col
-
-            df_energy[time_col_sin] = df_energy.dtm.apply(self.get_cycles, args = (0, col))
-            df_energy[time_col_cos] = df_energy.dtm.apply(self.get_cycles, args = (1, col))
+        #df_energy["unused_Solar_capacity_mwp"] = df_energy["Solar_installedcapacity_mwp"] = df_energy["Solar_capacity_mwp"]
 
         df_energy = df_energy.drop_duplicates()
+        df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit"]]
 
         return df_energy
 
@@ -241,9 +261,11 @@ class Preprocessing:
 
     def preprocess_geo_data(self, df):
         df = self.clean_geo_data(df)
-        df = self.handle_missing_data(df)
         df = self.add_statistical_data(df)
         df = self.add_other_features(df)
+        # some new features will have NaN value, e.g. due to not enough past values to calculate a rolling mean
+        df = df.bfill()
+        df = df.ffill()
 
         if "index" in df.columns:
             df.drop(["index"], axis = 1, inplace = True)
@@ -254,123 +276,257 @@ class Preprocessing:
     def clean_geo_data(self, df):
         # reset the index (reference_time, valid_time, latitude, longitude)
         df.reset_index(inplace = True)
-        # rename the columns properly
-        df = df.rename(columns = {"level_0": "reference_time", "level_1": "valid_time"})
+
         if "index" in df.columns:
             df.drop(columns = ["index"], axis = 1, inplace = True)
+        if "point" in df.columns:
+                df = df.drop("point", axis=1)
+
+        df = df.rename(columns = 
+                       {"level_0": "ref_time",
+                        "level_1": "val_time",
+                        "reference_datetime": "ref_time",
+                        "ref_datetime":"ref_time",
+                        "valid_datetime": "val_time",
+                        "valid_time": "val_time",
+                        "latitude": "lat",
+                        "longitude": "long",
+                        "RelativeHumidity": "rel_hum",
+                        "Temperature": "temp",
+                        "TotalPrecipitation": "total_prec",
+                        "WindDirection" : "wind_dir",
+                        "WindDirection:100": "wind_dir_100",
+                        "WindSpeed": "wind_speed",
+                        "WindSpeed:100" : "wind_speed_100",
+                        "CloudCover": "cloud_cover",
+                        "SolarDownwardRadiation": "solar_down_rad"})
+        
         # convert the datetime information to the right format
-        df["reference_time"] = pd.to_datetime(df.reference_time).dt.tz_localize("UTC")
-        df["forecast_horizon"] = df["valid_time"]
-        df["valid_time"] = df["reference_time"] + pd.to_timedelta(df["valid_time"], unit = "hour")
+
+        df["ref_time"] = pd.to_datetime(df["ref_time"])
+
+        if df["ref_time"].dt.tz is None:
+            df["ref_time"] = df["ref_time"].dt.tz_localize("UTC")
+
+        if not pd.api.types.is_datetime64_any_dtype(df['val_time']):
+            if df["val_time"].max() < 1000:
+                df["forecast_horizon"] = df["val_time"]
+                df["val_time"] = df["ref_time"] + pd.to_timedelta(df["val_time"], unit = "hour")
+            else:
+                df["val_time"] = pd.to_datetime(df["val_time"])
+                if df["val_time"].dt.tz is None:
+                    df["val_time"] = df["val_time"].dt.tz_localize("UTC")
+                df["forecast_horizon"] = (df["val_time"] - df["ref_time"]).div(pd.Timedelta("1h"))
+
         # remove forecasts which extend beyond the day ahead, since they will be outdated the next day anyway
-        df = df[(df["valid_time"] - df["reference_time"]).div(pd.Timedelta("1h")) < 50]
+        df = df[(df["val_time"] - df["ref_time"]).div(pd.Timedelta("1h")) < 50]
         # some data points have a miscalculation at their coordinates (e.g. ncep_gfs_demand). The actual coordinates can be identified by their value of the feature "point"
-        df.loc[df.longitude > 90, "longitude"] -= 360
-        df.loc[df.longitude < -90, "longitude"] += 360
+
+        df["long"] = df["long"].astype(float)
+        df["lat"] = df["lat"].astype(float)
+
+        df.loc[df.long > 90, "long"] -= 360
+        df.loc[df.long < -90, "long"] += 360
 
         # there are anomalies of the solar down radiation being above 1000 in a short time period. The maximum threshold is to be believed to be about 1000 W/m^2
         # source: https://www.researchgate.net/post/Are_there_minimum_and_maximum_threshold_of_solar_irradiance
-        if "SolarDownwardRadiation" in df.columns:
-            df = df[df["SolarDownwardRadiation"] <= 1000]
-            df.loc[df["SolarDownwardRadiation"] < 0, "SolarDownwardRadiation"] = 0
+        if "solar_down_rad" in df.columns:
+            df = df[df["solar_down_rad"] <= 1000]
+            df.loc[df["solar_down_rad"] < 0, "solar_down_rad"] = 0
             # convert W/m^2 to kW/km^2
-            # df["SolarDownwardRadiation"] = df["SolarDownwardRadiation"] * 1000
+            # df["solar_down_rad"] = df["solar_down_rad"] * 1000
 
-        if "RelativeHumidity" in df.columns:
-            df.loc[df["RelativeHumidity"] > 100, "RelativeHumidity"] = 100
-            df.loc[df["RelativeHumidity"] < 0, "RelativeHumidity"] = 0
+        if "rel_hum" in df.columns:
+            df.loc[df["rel_hum"] > 100, "rel_hum"] = 100
+            df.loc[df["rel_hum"] < 0, "rel_hum"] = 0
+                
+        if "total_prec" in df.columns:
+            df.loc[df["total_prec"] < 0, "total_prec"] = 0
+
+        df = self.remove_outliers(df)
+        df = self.handle_missing_data(df)
+
+        df = df.groupby(["ref_time", "val_time"]).mean().reset_index()
+        df.drop(columns = ["lat", "long"], axis = 1, inplace = True)
+
+        return df
+    
+
+    # def remove_outliers(self, df):
+    #     # remove outliers
+    #     df["year"] = df["val_time"].dt.year
+    #     df["month"] = df["val_time"].dt.month
+    #     df["day"] = df["val_time"].dt.day
+    #     df["hour"] = df["val_time"].dt.hour
+
+    #     features = list(df.columns)
+    #     for i in ["ref_time", "val_time", "lat", "long", "month", "day", "hour", "forecast_horizon"]:
+    #         if i in features:
+    #             features.remove(i)
+
+    #     for column in features:
+    #         q1 = df[column].quantile(0.25)
+    #         q3 = df[column].quantile(0.75)
+    #         iqr = q3 - q1
+
+    #         lower_bound = q1 - 1.5*iqr
+    #         upper_bound = q3 + 1.5*iqr
+
+    #         df[column] = df[column].where((df[column] >= lower_bound) | (df[column] <= upper_bound),
+    #                                         other=np.nan)
+    #         group_means = df.groupby(["year", "month", "day", "hour"])[column].transform("mean")
+    #         df[column] = df[column].fillna(group_means)
             
-        if "TotalPrecipitation" in df.columns:
-            df.loc[df["TotalPrecipitation"] < 0, "TotalPrecipitation"] = 0
+    #     df = df.drop(["year", "month", "day", "hour"], axis=1)
 
-        df = df.groupby(["reference_time", "valid_time"]).mean().reset_index()
-        df.drop(columns = ["latitude", "longitude"], axis = 1, inplace = True)
+    #     return df
 
-        if "point" in df.columns:
-            df.drop(["point"], axis = 1, inplace = True)
+
+    def remove_outliers(self, df, replace=True):
+        """Removes or replaces outliers of the weather data."""
+        features = list(df.columns)
+        for i in ["ref_time", "val_time", "lat", "long", "forecast_horizon"]:
+            if i in features:
+                features.remove(i)
+                
+        for column in features:
+            df[column] = df.groupby("val_time")[column].transform(lambda group: self.remove_outliers_group(group, replace))
+
+        if not replace:
+            df = df.dropna()
 
         return df
+    
+    def remove_outliers_group(self, group, replace):
+        """Replaces outliers within a group object."""
+        Q1 = group.quantile(0.25)
+        Q3 = group.quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+
+        if replace:
+            mean = group[(group >= lower_bound) & (group <= upper_bound)].mean()
+            group = group.where((group >= lower_bound) & (group <= upper_bound), mean)
+        else:
+            group = group.where((group >= lower_bound) & (group <= upper_bound), np.nan)
+
+        return group
 
 
-    def handle_missing_data(self, df):
-
-        # Remove data points with at least 80% of the features containing missing values.
-        df = df[df.isna().sum(axis=1) <= 0.8]
-
-        # Fill missing values by using the mean of other data points at a similiar time (same year, month and hour)
-        mask = df.isna().any(axis=1)
-        # Group by year, month, and hour, then calculate the mean
-        grouped_means = df.groupby([df.valid_time.dt.year, df.valid_time.dt.month, df.valid_time.dt.hour]).transform('mean')
-        # Fill missing values using the grouped means
-        df[mask] = df[mask].fillna(grouped_means)
+    def handle_missing_data(self, df, performance = False):
         
+        if not performance:
+            
+            df['lat_lon_combination'] = df['lat'].astype(str) + '_' + df['long'].astype(str)
+            cols_with_nan = df.columns[df.isna().any()].tolist()
+            
+            for col in cols_with_nan:
+                # Group and interpolate each column individually
+                df[col] = df.groupby(['forecast_horizon', 'lat_lon_combination'])[col].transform(
+                    lambda group: group.interpolate(method='linear') if group.notna().sum() > 1 else group
+                )
+
+            df.drop("lat_lon_combination", axis=1, inplace=True)
+            mask = df.isna().any(axis=1)
+        
+            if mask.any():
+                # Gruppiere nach Jahr, Monat und Stunde und berechne den Mittelwert für numerische Spalten
+                grouped_means = df.groupby([df.val_time.dt.year, df.val_time.dt.month, df.val_time.dt.hour])[cols_with_nan].transform('mean')
+
+                # Fülle die verbliebenen NaN-Werte mit den berechneten Mittelwerten
+                df[mask] = df[mask].fillna(grouped_means)
+
+        if performance:
+
+            mask = df.isna().any(axis=1)
+            # Group by year, month, and hour, then calculate the mean
+            grouped_means = df.groupby([df.val_time.dt.year, df.val_time.dt.month, df.val_time.dt.hour]).transform('mean')
+            # Fill missing values using the grouped means
+            df[mask] = df[mask].fillna(grouped_means)
+
         return df
+    
+
+    def merge_weather_stations_data(self, weather_data_1, weather_data_2, aggregate_by:str = "val_time", aggregate_by_ref_time_too:bool = True):
+        """Merge the weather data from the DWD and NCEP weather stations."""
+
+        assert aggregate_by in weather_data_1.columns, f"Dimension {aggregate_by} to aggregate by was not found in the first dataset."
+        assert aggregate_by in weather_data_2.columns, f"Dimension {aggregate_by} to aggregate by was not found in the second dataset."
+        assert "datetime" in str(weather_data_1[aggregate_by].dtype), f"First input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime."
+        assert "datetime" in str(weather_data_2[aggregate_by].dtype), f"Second input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime."
+
+        # merge forecasts from different locations to one aggregated value per reference and valid time
+        if aggregate_by_ref_time_too:
+            weather_data = pd.concat([weather_data_1, weather_data_2]).groupby(["ref_time", aggregate_by]).mean()
+        else:
+            weather_data = pd.concat([weather_data_1, weather_data_2]).groupby([aggregate_by]).mean()
+
+        if "lat" in weather_data.columns and "long" in weather_data.columns:
+                weather_data = weather_data.drop(["lat", "long"], axis = 1)
+        if "ref_time" in weather_data.columns:
+            weather_data = weather_data.drop(["ref_time"], axis = 1)
+
+        # merge forecasts on valid time
+        # resampling will lead to every 2nd row being empty, thus, an interpolation is required
+        weather_data = weather_data.resample("30min", level = 1).mean().interpolate("time")
+
+        return weather_data
 
 
     def add_statistical_data(self, df):
+        # add the rolling mean/std/min/max of the last 48 data points (each data point represents a 30min period) as a feature
 
-        df_std = df.drop(["forecast_horizon"], axis = 1).set_index("valid_time").resample("24h").std().sort_values("valid_time").drop(["reference_time"], axis = 1)
-        df_mean = df.drop(["forecast_horizon"], axis = 1).set_index("valid_time").resample("24h").mean().sort_values("valid_time").drop(["reference_time"], axis = 1)
-        df_min = df.drop(["forecast_horizon"], axis = 1).set_index("valid_time").resample("24h").min().sort_values("valid_time").drop(["reference_time"], axis = 1)
-        df_max = df.drop(["forecast_horizon"], axis = 1).set_index("valid_time").resample("24h").max().sort_values("valid_time").drop(["reference_time"], axis = 1)
+        for feature in ["temp", "wind_speed", "wind_speed_100", "wind_direction", "wind_direction_100", "solar_down_rad", "cloud_cover", "total_prec"]:
+            if feature in df.columns:
+                df[f"{feature}_mean"] = df[f"{feature}"].rolling(48).mean()
+                df[f"{feature}_std"] = df[f"{feature}"].rolling(48).std()
+                df[f"{feature}_min"] = df[f"{feature}"].rolling(48).min()
+                df[f"{feature}_max"] = df[f"{feature}"].rolling(48).max()
 
-        df_std.columns = [x + "_std" for x in df_std.columns]
-        df_mean.columns = [x + "_mean" for x in df_mean.columns]
-        df_min.columns = [x + "_min" for x in df_min.columns]
-        df_max.columns = [x + "_max" for x in df_max.columns]
-
-        df = df.sort_values("valid_time")
-
-        for data in [df_std, df_mean, df_min, df_max]:
-            df = pd.merge(df, data, on = "valid_time", how = "left")
-
-        # Convert pandas dataframe to dask dataframe to enable a faster operation
-        ddf = dd.from_pandas(df, npartitions=10)
-        # fill the missing values, since the aggregations were computed on rows whose datetime values were at 12am.
-        df = ddf.ffill().compute()
+        df = df.sort_values("val_time")
 
         return df
 
 
     def add_other_features(self, df):
 
-        # bins = [0, 1, 5, 11, 19, 28, 38, 49, 61, 74, 88, 102, 117, float("inf")]
-        # labels = [x for x in range(0,13,1)]
-
-        if "WindSpeed" in df.columns:
+        if "wind_speed" in df.columns:
             # convert wind speed from m/s to km/h
-            df["WindSpeed"] = df["WindSpeed"] * 3.6
-            df["WindSpeed_range"] = df["WindSpeed_max"] - df["WindSpeed_min"]
-            # add the beaufort scala for the wind speed
-            # df["BeaufortScale"] = pd.cut(df["WindSpeed"], bins = bins, labels = labels, right = False)
-            # df["BeaufortScale"] = pd.to_numeric(df["BeaufortScale"])
+            df["wind_speed"] = df["wind_speed"] * 3.6
+            df["wind_speed_range"] = df["wind_speed_max"] - df["wind_speed_min"]
 
-        if "WindSpeed:100" in df.columns:
+        if "wind_speed_100" in df.columns:
             # convert wind speed from m/s to km/h
-            df["WindSpeed:100"] = df["WindSpeed:100"] * 3.6
-            df["WindSpeed:100_range"] = df["WindSpeed:100_max"] - df["WindSpeed:100_min"]
-            # add the beaufort scala for the wind speed
-            # df["BeaufortScale:100"] = pd.cut(df["WindSpeed:100"], bins = bins, labels = labels, right = False)
-            # df["BeaufortScale:100"] = pd.to_numeric(df["BeaufortScale:100"])
+            df["wind_speed_100"] = df["wind_speed_100"] * 3.6
+            df["wind_speed_100_range"] = df["wind_speed_100_max"] - df["wind_speed_100_min"]
             # add the altitude difference in wind speed
-            df["WindSpeedAltitudeDiff"] = df["WindSpeed:100"] - df["WindSpeed"]
+            df["wind_speed_altitude_diff"] = df["wind_speed_100"] - df["wind_speed"]
 
-        if "WindDirection" in df.columns:
-            df["WindDirection_sin"] = df["WindDirection"].apply(self.convert_wind_directions_to_sin)
-            df["WindDirection_cos"] = df["WindDirection"].apply(self.convert_wind_directions_to_cos)
-            df.drop(columns = ["WindDirection"], axis = 1, inplace = True)
+        if "wind_dir" in df.columns:
+            df["wind_dir_sin"] = df["wind_dir"].apply(self.convert_wind_directions_to_sin)
+            df["wind_dir_cos"] = df["wind_dir"].apply(self.convert_wind_directions_to_cos)
+            df.drop(columns = ["wind_dir"], axis = 1, inplace = True)
 
-        if "WindDirection:100" in df.columns:
-            df["WindDirection:100_sin"] = df["WindDirection:100"].apply(self.convert_wind_directions_to_sin)
-            df["WindDirection:100_cos"] = df["WindDirection:100"].apply(self.convert_wind_directions_to_cos)
-            df.drop(columns = ["WindDirection:100"], axis = 1, inplace = True)
+        if "wind_dir_100" in df.columns:
+            df["wind_dir_100_sin"] = df["wind_dir_100"].apply(self.convert_wind_directions_to_sin)
+            df["wind_dir_100_cos"] = df["wind_dir_100"].apply(self.convert_wind_directions_to_cos)
+            df.drop(columns = ["wind_dir_100"], axis = 1, inplace = True)
 
-        if "SolarDownwardRadiation" in df.columns:
-            df["SolarDownwardRadiation_range"] = df["SolarDownwardRadiation_max"] - df["SolarDownwardRadiation_min"]
-            df["Interaction_SolarDownwardRadiation_Temperature"] = df["SolarDownwardRadiation"] * df["Temperature"]
+        if "solar_down_rad" in df.columns:
+            df["solar_down_rad_range"] = df["solar_down_rad_max"] - df["solar_down_rad_min"]
+            df["interaction_solar_down_rad_temp"] = df["solar_down_rad"] * df["temp"]
 
-        if "Temperature" in df.columns:
-            df["Temperature_range"] = df["Temperature_max"] - df["Temperature_min"]
+        if "temp" in df.columns:
+            df["temp_range"] = df["temp_max"] - df["temp_min"]
+
+
+        for col in ["month", "day", "dayofweek", "hour"]:
+            time_col_sin = "sin_" + col
+            time_col_cos = "cos_" + col
+
+            df[time_col_sin] = df["val_time"].apply(self.get_cycles, args = (0, col))
+            df[time_col_cos] = df["val_time"].apply(self.get_cycles, args = (1, col))
 
         return df
     
@@ -383,57 +539,32 @@ class Preprocessing:
     def convert_wind_directions_to_cos(self, data):
         data = np.deg2rad(data)
         return math.cos(data)
-    
-
-    def merge_weather_stations_data(self, weather_data_1, weather_data_2, aggregate_by:str = "valid_time", aggregate_by_reference_time_too:bool = True):
-        """Merge the weather data from the DWD and NCEP weather stations."""
-
-        assert(aggregate_by in weather_data_1.columns, f"Dimension {aggregate_by} to aggregate by was not found in the first dataset.")
-        assert(aggregate_by in weather_data_2.columns, f"Dimension {aggregate_by} to aggregate by was not found in the second dataset.")
-        assert("datetime" in str(weather_data_1[aggregate_by].dtype), f"First input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime.")
-        assert("datetime" in str(weather_data_2[aggregate_by].dtype), f"Second input's dimension to aggregate by ({aggregate_by}) is not properly formatted to datetime.")
-
-        # NACH VALID UND REFERENCE TIME AGGREGIEREN
-        if aggregate_by_reference_time_too:
-            weather_data = pd.concat([weather_data_1, weather_data_2]).groupby(["reference_time", aggregate_by]).mean()
-        else:
-            weather_data = pd.concat([weather_data_1, weather_data_2]).groupby([aggregate_by]).mean()
-
-            if "reference_time" in weather_data.columns:
-                weather_data = weather_data.drop(["reference_time"], axis = 1)
-
-        return weather_data
         
 
-    def merge_geo_energy_outage_data(self, geo_data, energy_outage_data, left_merge:str = "valid_time", right_merge:str = "dtm"):
+    def merge_geo_energy_outage_data(self, geo_data, energy_outage_data, left_merge:str = "val_time", right_merge:str = "dtm"):
         """Combine the geo data from the weather stations with the energy and outage data (CSV and JSON files combined)."""
 
-        assert(left_merge in geo_data.columns, f"{left_merge} not found in geo data.")
-        assert(right_merge in energy_outage_data.columns, f"{right_merge} not found in energy and outage data.")
-
         geo_data = geo_data.reset_index()
+
+        assert left_merge in geo_data.columns, f"{left_merge} not found in geo data."
+        assert right_merge in energy_outage_data.columns, f"{right_merge} not found in energy and outage data."
 
         if "index" in geo_data.columns:
             geo_data.drop(columns = ["index"], axis = 1, inplace = True)
 
-        assert(type(geo_data) == type(pd.DataFrame()), "Geo data is not a pandas dataframe object.")
-        assert(type(energy_outage_data) == type(pd.DataFrame()), "Data with energy and outages is not a pandas dataframe object.")
-        assert(geo_data.shape[0] > 0, "Geo data is empty.")
-        assert(energy_outage_data.shape[0] > 0, "Energy and outage data is empty.")
-        assert("datetime" in str(geo_data[left_merge].dtype), f"First input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime.")
-        assert("datetime" in str(energy_outage_data[right_merge].dtype), f"Second input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime.")
+        assert type(geo_data) == type(pd.DataFrame()), "Geo data is not a pandas dataframe object."
+        assert type(energy_outage_data) == type(pd.DataFrame()), "Data with energy and outages is not a pandas dataframe object."
+        assert geo_data.shape[0] > 0, "Geo data is empty."
+        assert energy_outage_data.shape[0] > 0, "Energy and outage data is empty."
+        assert "datetime" in str(geo_data[left_merge].dtype), f"First input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime."
+        assert "datetime" in str(energy_outage_data[right_merge].dtype), f"Second input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime."
 
         merged_data = geo_data.merge(energy_outage_data, left_on = left_merge, right_on = right_merge, how = "right")
-        # fill na values (geo data has only 60min intervals, thus every second 30min interval will be empty).
-        merged_data = merged_data.interpolate("linear")
+        merged_data = merged_data.drop_duplicates().groupby(right_merge).mean()
         merged_data = merged_data.dropna(axis = 0)
-        merged_data.set_index(right_merge, inplace = True)
 
         if left_merge in merged_data.columns:
             merged_data.drop(columns = [left_merge], axis = 1, inplace = True)
-
-        merged_data = merged_data.sort_index()
-        merged_data.drop(["reference_time"], axis = 1, inplace = True)
 
         return merged_data
     
@@ -441,10 +572,9 @@ class Preprocessing:
     def add_difference_features(self, data):
         """Add features based on the difference of values between data points."""
 
-        for col in ['RelativeHumidity', 'Temperature', 'TotalPrecipitation',
-                    'WindDirection', 'WindSpeed', 'MIP',
-                    'availableCapacity', 'unavailableCapacity',
-                    'CloudCover', 'SolarDownwardRadiation', 'Temperature']:
+        for col in ['rel_hum', 'temp', 'total_precipitation',
+                    'wind_direction', 'wind_speed', "wind_speed_100",
+                    'cloud_cover', 'solar_down_rad']:
     
             new_col = col + "_diff"
             if col in data.columns:
@@ -456,9 +586,27 @@ class Preprocessing:
         return data
     
 
+    def add_fft_features(self, data, columns_to_fft:list = ["temp_diff", "solar_down_rad_diff", "wind_speed_diff", "wind_speed_100_diff"]):
+        """Perform a Fast Fourier Transformation (FFT) on selected features (defined in columns_to_fft). Apply a FFT for each unique date in the dataset (one FFT per day)."""
+        for column in columns_to_fft:
+            print(f"Apply FFT on {column}...")
+            if column in data.columns:
+                for date in data.groupby(data.index.date).max().index:
+                    data.loc[data.index.date == date, f"{column}_fft"] = np.abs(np.fft.fft(data.loc[data.index.date == date, f"{column}"]))
+
+        return data
+    
+
 
 class FeatureEngineerer:
-    def __init__(self, data, columns_to_ohe:list = list(), train_ratio:float = 0.7, test_ratio:float = 0.1, scaler:str = "standard"):
+    def __init__(self, data, label:str = "Solar_MWh_credit", labels_to_remove:list = ["Solar_MWh_credit", "Wind_MWh_credit"], 
+                 columns_to_ohe:list = list(), train_ratio:float = 0.7, val_ratio:float = 0.2, test_ratio:float = 0.1, scaler:str = "standard"):
+        assert train_ratio + val_ratio + test_ratio <= 1, "Train, validation and test data ratio can only equal to 1 as a sum."
+
+        self.label = label
+        if type(labels_to_remove) != type(list()):
+            labels_to_remove = [labels_to_remove]
+        self.labels_to_remove = labels_to_remove
         self.columns_to_ohe = columns_to_ohe
         self.train_ratio = train_ratio
         self.test_ratio = test_ratio
@@ -470,20 +618,47 @@ class FeatureEngineerer:
         else:
             self.scaler = RobustScaler()
 
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(data, train_size = self.train_ratio, random_state = 42)
+        self.train_val_test_split(data)
 
-        # check for valid input for columns to onehotencode
         if len(self.columns_to_ohe) > 0:
-            for column in self.columns_to_ohe:
+            self.onehotencode(data)
+
+        self.scale()
+
+
+    def train_val_test_split(self, data):
+        ts = TimeSeriesSplit(n_splits = 5)
+        # the last 10% of the dataset will be used for the test data set
+        X_train_val = data.drop(self.labels_to_remove, axis = 1).iloc[:int(data.shape[0] * (1 - self.test_ratio)), :]
+        y_train_val = data[self.label].iloc[:int(data.shape[0] * 0.9)]
+
+        self.X_test = data.drop(self.labels_to_remove, axis = 1).iloc[int(data.shape[0] * (1 - self.test_ratio)):, :]
+        self.y_test = data[self.label].iloc[int(data.shape[0] * 0.9):]
+
+        for train_index, val_index in ts.split(X_train_val):
+            self.X_train, self.X_val = X_train_val.iloc[train_index, :], X_train_val.iloc[val_index, :]
+            self.y_train, self.y_val = y_train_val.iloc[train_index], y_train_val.iloc[val_index]
+
+
+    def onehotencode(self, data, columns_to_ohe):
+        # check for valid input for columns to onehotencode
+        if len(columns_to_ohe) > 0:
+            for column in columns_to_ohe:
                 if column not in data.columns:
                     self.columns_to_ohe.remove(column)
 
+        if len(columns_to_ohe) > 1:
             self.ohe = OneHotEncoder()
-            self.X_train = self.ohe.fit_transform(self.X_train)
-            self.X_test = self.ohe.transform(self.X_test)
+            self.X_train[columns_to_ohe] = self.ohe.fit_transform(self.X_train[columns_to_ohe])
+            self.X_test[columns_to_ohe] = self.ohe.transform(self.X_test[columns_to_ohe])        
+            self.X_train[columns_to_ohe] = self.scaler.fit_transform(self.X_train[columns_to_ohe])
+            self.X_test[columns_to_ohe] = self.scaler.transform(self.X_test[columns_to_ohe])
         else:
-            self.ohe = None
+            print("No features found to onehotencode.")
 
+    
+    def scale(self):
         self.X_train = self.scaler.fit_transform(self.X_train)
+        self.X_val = self.scaler.transform(self.X_val)
         self.X_test = self.scaler.transform(self.X_test)
 

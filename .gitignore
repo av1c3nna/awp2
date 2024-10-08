@@ -8,3 +8,6 @@ environments.yml
 Getting Started.ipynb
 zeug.txt
 *.json
+*.csv
+*.nc
+*.pyc
