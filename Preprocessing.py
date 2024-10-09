@@ -564,7 +564,7 @@ class Preprocessing:
             merged_data = aggregated_numerical_cols.merge(aggregated_string_cols, left_index = True, right_index = True)
         # perform this if the data contains only numerical columns
         else:
-            merged_data = geo_data.merge(energy_outage_data, left_on = left_merge, right_on = right_merge, how = "left")
+            merged_data = merged_data.groupby(right_merge).mean()
             if right_merge in merged_data.columns:
                 merged_data = merged_data.set_index(right_merge)
 
@@ -684,6 +684,7 @@ class FeatureEngineerer:
                 return data
         else:
             print("No features found to onehotencode.")
+            return data
 
     
     def scale(self, deployment:bool = False, deployment_data = None):
