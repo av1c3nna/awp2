@@ -37,6 +37,10 @@ class FileExtractor:
 
     def combine_files(self, path, file_name, file_format:str=".nc"):
         """Combine files of the same dataset with different timestamps. Converts them into a dataframe."""
+
+        if file_format.lower() == ".json":
+            return self.extract_json_files(path)
+
         df = None
         df_new = None
 
@@ -88,27 +92,43 @@ class Preprocessing:
 
     def perform_preprocessing_pipeline(self, geo_data_dict:dict, 
                                        aggregate_by:str = "val_time", aggregate_by_ref_time_too:bool = True,
+                                       merge_with_outage_data:bool = True, json_file_path:str = "nc_files/REMIT",
+                                       non_numerical_columns:list = ["unavailabilityType", "affectedUnit"],
                                        fft:bool = False, columns_to_fft:list = ["temp_diff", "solar_down_rad_diff", "wind_speed_diff", "wind_speed_100_diff"],
                                        deployment:bool = True, energy_data_dict:dict = dict(), left_merge:str = "val_time", right_merge:str = "dtm"):
         weather_data = list()
         extractor = FileExtractor()
+        self.non_numerical_columns = non_numerical_columns
+
         for file_name_pattern, file_path in geo_data_dict.items():
             weather_data.append(extractor.combine_files(file_path, file_name_pattern, ".nc"))
 
+        print("Perform data cleaning on the weather data...")
         for index in range(0, len(weather_data)):
             weather_data[index] = self.preprocess_geo_data(weather_data[index])
 
+        print("Merge weather stations...")
         df = self.merge_weather_stations_data(weather_data_1 = weather_data[0], weather_data_2 = weather_data[1], aggregate_by = aggregate_by, aggregate_by_ref_time_too = aggregate_by_ref_time_too)
         df = self.add_difference_features(df)
+
+        # the outage data contains information only relevant about the HORNSEA wind park. Thus, it is only relevant for data regarding the wind power forecast.
+        if merge_with_outage_data and "wind_speed" in df.columns:
+            print("Merge with outages data (REMIT)...")
+            outage_data = extractor.extract_json_files(json_file_path)
+            outage_data = self.preprocess_outage_data(outage_data)
+            df = self.merge_with_outages(df, outage_data)
 
         if fft:
             df = self.add_fft_features(df, columns_to_fft = columns_to_fft)
 
         if deployment == False:
+            print("Merge with label data...")
             key = next(iter(energy_data_dict))
             energy_df = extractor.combine_files(energy_data_dict[key], key, ".csv")
             energy_df = self.preprocess_energy_data(energy_df)
             df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge)
+        
+        print("Preprocessing done!")
 
         return df
 
@@ -220,6 +240,18 @@ class Preprocessing:
         return outages_df
     
 
+    def merge_with_outages(self, df, outage_data):
+        df = pd.merge_asof(left = df, right = outage_data.sort_index(), left_index = True, right_index = True, direction = "nearest", tolerance = pd.Timedelta("30m"))
+
+        # the merge will result in NA values (since outages are not present all the time), thus they have to be filled with replacement values
+        df[["affectedUnit", "unavailabilityType"]] = df[["affectedUnit", "unavailabilityType"]].fillna("None")
+        df[["unavailableCapacity", "hoursSinceOutage", "hoursUntilOutageEnd"]] =df[["unavailableCapacity", "hoursSinceOutage", "hoursUntilOutageEnd"]].fillna(0)
+        df[["availableCapacity"]] = df[["availableCapacity"]].fillna(400)
+        df["outage"] = df["outage"].fillna(False).astype(int)
+
+        return df
+    
+
     def preprocess_energy_data(self, df_energy):
         # convert the datetime information to the right format
         df_energy["dtm"] = pd.to_datetime(df_energy["dtm"])
@@ -245,18 +277,6 @@ class Preprocessing:
         df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit"]]
 
         return df_energy
-
-
-    def merge_energy_with_outages(self, energy_data, outage_data):
-        energy_with_outages = pd.merge_asof(left = energy_data, right = outage_data, left_on = "dtm", right_on = outage_data.sort_index().index, direction = "nearest", tolerance = pd.Timedelta("30m"))
-
-        # the merge will result in NA values (since outages are not present all the time), thus they have to be filled with replacement values
-        energy_with_outages[["affectedUnit", "unavailabilityType"]] = energy_with_outages[["affectedUnit", "unavailabilityType"]].fillna("None")
-        energy_with_outages[["unavailableCapacity", "hoursSinceOutage", "hoursUntilOutageEnd"]] = energy_with_outages[["unavailableCapacity", "hoursSinceOutage", "hoursUntilOutageEnd"]].fillna(0)
-        energy_with_outages[["availableCapacity"]] = energy_with_outages[["availableCapacity"]].fillna(400)
-        energy_with_outages["outage"] = energy_with_outages["outage"].fillna(False).astype(int)
-
-        return energy_with_outages
 
 
     def preprocess_geo_data(self, df):
@@ -350,36 +370,6 @@ class Preprocessing:
         df.drop(columns = ["lat", "long"], axis = 1, inplace = True)
 
         return df
-    
-
-    # def remove_outliers(self, df):
-    #     # remove outliers
-    #     df["year"] = df["val_time"].dt.year
-    #     df["month"] = df["val_time"].dt.month
-    #     df["day"] = df["val_time"].dt.day
-    #     df["hour"] = df["val_time"].dt.hour
-
-    #     features = list(df.columns)
-    #     for i in ["ref_time", "val_time", "lat", "long", "month", "day", "hour", "forecast_horizon"]:
-    #         if i in features:
-    #             features.remove(i)
-
-    #     for column in features:
-    #         q1 = df[column].quantile(0.25)
-    #         q3 = df[column].quantile(0.75)
-    #         iqr = q3 - q1
-
-    #         lower_bound = q1 - 1.5*iqr
-    #         upper_bound = q3 + 1.5*iqr
-
-    #         df[column] = df[column].where((df[column] >= lower_bound) | (df[column] <= upper_bound),
-    #                                         other=np.nan)
-    #         group_means = df.groupby(["year", "month", "day", "hour"])[column].transform("mean")
-    #         df[column] = df[column].fillna(group_means)
-            
-    #     df = df.drop(["year", "month", "day", "hour"], axis=1)
-
-    #     return df
 
 
     def remove_outliers(self, df, replace=True):
@@ -560,7 +550,25 @@ class Preprocessing:
         assert "datetime" in str(energy_outage_data[right_merge].dtype), f"Second input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime."
 
         merged_data = geo_data.merge(energy_outage_data, left_on = left_merge, right_on = right_merge, how = "right")
-        merged_data = merged_data.drop_duplicates().groupby(right_merge).mean()
+
+        for col in self.non_numerical_columns[:]:
+            # check for valid input
+            if (col not in geo_data.columns) & (col not in energy_outage_data.columns):
+                self.non_numerical_columns.remove(col)
+        # perform this only if the data contains non-numerical columns
+        if len(self.non_numerical_columns) > 0:
+            # we aggregate the numerical and non-numerical columns seperately and then combine them
+            # mean does not support non-numerical columns
+            aggregated_numerical_cols = merged_data.drop(self.non_numerical_columns, axis = 1).groupby(right_merge).mean()
+            aggregated_string_cols = merged_data[[*self.non_numerical_columns, right_merge]].groupby(right_merge).first()
+            merged_data = aggregated_numerical_cols.merge(aggregated_string_cols, left_index = True, right_index = True)
+        # perform this if the data contains only numerical columns
+        else:
+            merged_data = geo_data.merge(energy_outage_data, left_on = left_merge, right_on = right_merge, how = "left")
+            if right_merge in merged_data.columns:
+                merged_data = merged_data.set_index(right_merge)
+
+        merged_data = merged_data.drop_duplicates()
         merged_data = merged_data.dropna(axis = 0)
 
         if left_merge in merged_data.columns:
@@ -599,31 +607,43 @@ class Preprocessing:
 
 
 class FeatureEngineerer:
-    def __init__(self, data, label:str = "Solar_MWh_credit", labels_to_remove:list = ["Solar_MWh_credit", "Wind_MWh_credit"], 
-                 columns_to_ohe:list = list(), train_ratio:float = 0.7, val_ratio:float = 0.2, test_ratio:float = 0.1, scaler:str = "standard"):
+    def __init__(self, label:str = "Solar_MWh_credit", labels_to_remove:list = ["Solar_MWh_credit", "Wind_MWh_credit"], 
+                 columns_to_ohe:list = list(), train_ratio:float = 0.7, val_ratio:float = 0.2, test_ratio:float = 0.1, scaler_name:str = "standard"):
         assert train_ratio + val_ratio + test_ratio <= 1, "Train, validation and test data ratio can only equal to 1 as a sum."
 
         self.label = label
-        if type(labels_to_remove) != type(list()):
-            labels_to_remove = [labels_to_remove]
         self.labels_to_remove = labels_to_remove
         self.columns_to_ohe = columns_to_ohe
         self.train_ratio = train_ratio
+        self.val_ratio = val_ratio
         self.test_ratio = test_ratio
+        self.scaler_name = scaler_name
 
-        if scaler.lower() == "standard":
-            self.scaler = StandardScaler()
-        elif scaler.lower() == "minmax":
-            self.scaler = MinMaxScaler()
+    def perform_feature_engineering(self, data, deployment:bool = False, labels_to_remove:list = ["Solar_MWh_credit", "Wind_MWh_credit"]):
+
+        if deployment:
+            deployment_data = data.copy()
         else:
-            self.scaler = RobustScaler()
+            if type(labels_to_remove) != type(list()):
+                labels_to_remove = [labels_to_remove]
+            self.labels_to_remove = labels_to_remove
+            self.columns_to_ohe = self.columns_to_ohe
+            self.train_ratio = self.train_ratio
+            self.test_ratio = self.test_ratio
 
-        self.train_val_test_split(data)
+            if self.scaler_name.lower() == "standard":
+                self.scaler = StandardScaler()
+            elif self.scaler_name.lower() == "minmax":
+                self.scaler = MinMaxScaler()
+            else:
+                self.scaler = RobustScaler()
+
+            self.train_val_test_split(data)
 
         if len(self.columns_to_ohe) > 0:
-            self.onehotencode(data)
+            self.onehotencode(data, deployment = deployment)
 
-        self.scale()
+        self.scale(deployment = deployment, deployment_data = data)
 
 
     def train_val_test_split(self, data):
@@ -640,25 +660,31 @@ class FeatureEngineerer:
             self.y_train, self.y_val = y_train_val.iloc[train_index], y_train_val.iloc[val_index]
 
 
-    def onehotencode(self, data, columns_to_ohe):
+    def onehotencode(self, data, columns_to_ohe:str = ['unavailabilityType', 'affectedUnit', 'outage'], deployment:bool = False):
         # check for valid input for columns to onehotencode
         if len(columns_to_ohe) > 0:
-            for column in columns_to_ohe:
+            for column in columns_to_ohe[:]:
                 if column not in data.columns:
                     self.columns_to_ohe.remove(column)
 
         if len(columns_to_ohe) > 1:
-            self.ohe = OneHotEncoder()
-            self.X_train[columns_to_ohe] = self.ohe.fit_transform(self.X_train[columns_to_ohe])
-            self.X_test[columns_to_ohe] = self.ohe.transform(self.X_test[columns_to_ohe])        
-            self.X_train[columns_to_ohe] = self.scaler.fit_transform(self.X_train[columns_to_ohe])
-            self.X_test[columns_to_ohe] = self.scaler.transform(self.X_test[columns_to_ohe])
+            if deployment == False:
+                self.ohe = OneHotEncoder()
+                self.X_train[columns_to_ohe] = self.ohe.fit_transform(self.X_train[columns_to_ohe])
+                self.X_test[columns_to_ohe] = self.ohe.transform(self.X_test[columns_to_ohe])        
+                self.X_train[columns_to_ohe] = self.scaler.fit_transform(self.X_train[columns_to_ohe])
+                self.X_test[columns_to_ohe] = self.scaler.transform(self.X_test[columns_to_ohe])
+            else:
+                data[columns_to_ohe] = self.scaler.transform(data[columns_to_ohe])
+                return data
         else:
             print("No features found to onehotencode.")
 
     
-    def scale(self):
-        self.X_train = self.scaler.fit_transform(self.X_train)
-        self.X_val = self.scaler.transform(self.X_val)
-        self.X_test = self.scaler.transform(self.X_test)
-
+    def scale(self, deployment:bool = False, deployment_data = None):
+        if deployment == False:
+            self.X_train = self.scaler.fit_transform(self.X_train)
+            self.X_val = self.scaler.transform(self.X_val)
+            self.X_test = self.scaler.transform(self.X_test)
+        else:
+            return self.scaler.transform(deployment_data)
