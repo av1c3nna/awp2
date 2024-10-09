@@ -669,13 +669,18 @@ class FeatureEngineerer:
 
         if len(columns_to_ohe) > 1:
             if deployment == False:
-                self.ohe = OneHotEncoder()
-                self.X_train[columns_to_ohe] = self.ohe.fit_transform(self.X_train[columns_to_ohe])
-                self.X_test[columns_to_ohe] = self.ohe.transform(self.X_test[columns_to_ohe])        
-                self.X_train[columns_to_ohe] = self.scaler.fit_transform(self.X_train[columns_to_ohe])
-                self.X_test[columns_to_ohe] = self.scaler.transform(self.X_test[columns_to_ohe])
+                self.ohe = OneHotEncoder(sparse_output = False, handle_unknown = "infrequent_if_exist")
+                self.X_train[self.ohe.get_feature_names_out()] = self.ohe.fit_transform(self.X_train[columns_to_ohe])
+                self.X_train.drop(columns = columns_to_ohe, axis = 1, inplace = True)
+
+                self.X_val[self.ohe.get_feature_names_out()] = self.ohe.transform(self.X_val[columns_to_ohe])
+                self.X_val.drop(columns = columns_to_ohe, axis = 1, inplace = True)
+
+                self.X_test[self.ohe.get_feature_names_out()] = self.ohe.transform(self.X_test[columns_to_ohe])
+                self.X_test.drop(columns = columns_to_ohe, axis = 1, inplace = True)
             else:
-                data[columns_to_ohe] = self.scaler.transform(data[columns_to_ohe])
+                data[self.ohe.get_feature_names_out()] = self.ohe.transform(data[columns_to_ohe])
+                data.drop(columns = columns_to_ohe, axis = 1, inplace = True)
                 return data
         else:
             print("No features found to onehotencode.")
