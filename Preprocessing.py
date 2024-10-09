@@ -666,8 +666,8 @@ class FeatureEngineerer:
             for column in columns_to_ohe[:]:
                 if column not in data.columns:
                     self.columns_to_ohe.remove(column)
-
-        if len(columns_to_ohe) > 1:
+        
+        if len(self.columns_to_ohe) > 0:
             if deployment == False:
                 self.ohe = OneHotEncoder(sparse_output = False, handle_unknown = "infrequent_if_exist")
                 self.X_train[self.ohe.get_feature_names_out()] = self.ohe.fit_transform(self.X_train[columns_to_ohe])
