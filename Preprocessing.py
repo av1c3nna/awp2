@@ -276,15 +276,15 @@ class Preprocessing:
             df_energy["Wind_MWh_credit"] = df_energy["Wind_MW"] - df_energy["boa_MWh"]
             df_energy.rename(columns = {"Solar_MW": "Solar_MWh_credit", "Wind_MW": "Wind_MWh", "Solar_installedcapacity_mwp": "installed_capacity_mwp", "Solar_capacity_mwp": "capacity_mwp"}, inplace = True)
             df_energy.drop(["Wind_MWh"], axis = 1, inplace = True)
+            df_energy["unused_capacity_mwp"] = df_energy["installed_capacity_mwp"] - df_energy["capacity_mwp"]
 
             df_energy = df_energy.drop_duplicates()
-            df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit", "installed_capacity_mwp", "capacity_mwp"]]
+            df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
         else:
             df_energy.rename(columns = {"Solar_installedcapacity_mwp": "installed_capacity_mwp", "Solar_capacity_mwp": "capacity_mwp"}, inplace = True)
             df_energy = df_energy.drop_duplicates()
-            df_energy = df_energy[["dtm", "installed_capacity_mwp", "capacity_mwp"]]
+            df_energy = df_energy[["dtm", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
 
-        #df_energy["unused_capacity_mwp"] = df_energy["installedcapacity_mwp"] = df_energy["capacity_mwp"]
         return df_energy
 
 
@@ -395,6 +395,7 @@ class Preprocessing:
             df = df.dropna()
 
         return df
+    
     
     def remove_outliers_group(self, group, replace):
         """Replaces outliers within a group object."""
@@ -591,7 +592,8 @@ class Preprocessing:
 
         for col in ['rel_hum', 'temp', 'total_precipitation',
                     'wind_direction', 'wind_speed', "wind_speed_100",
-                    'cloud_cover', 'solar_down_rad']:
+                    'cloud_cover', 'solar_down_rad',
+                    "unused_capacity_mwp"]:
     
             new_col = col + "_diff"
             if col in data.columns:
