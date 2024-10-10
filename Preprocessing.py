@@ -623,7 +623,7 @@ class FeatureEngineerer:
 
 
         if deployment:
-            deployment_data = data.copy()
+            self.deployment_data = data.copy()
         else:
             self.features_after_fe = [*data.drop(labels_to_remove, axis = 1).columns]
 
@@ -646,7 +646,7 @@ class FeatureEngineerer:
         if len(self.columns_to_ohe) > 0:
             self.onehotencode(data, deployment = deployment)
 
-        self.scale(deployment = deployment, deployment_data = data)
+        self.scale(deployment = deployment)
 
 
     def train_val_test_split(self, data):
@@ -687,16 +687,16 @@ class FeatureEngineerer:
             else:
                 data[self.ohe.get_feature_names_out()] = self.ohe.transform(data[columns_to_ohe])
                 data.drop(columns = columns_to_ohe, axis = 1, inplace = True)
-                return data
+                self.deployment_data = data
         else:
             print("No features found to onehotencode.")
             return data
 
     
-    def scale(self, deployment:bool = False, deployment_data = None):
+    def scale(self, deployment:bool = False):
         if deployment == False:
             self.X_train = self.scaler.fit_transform(self.X_train)
             self.X_val = self.scaler.transform(self.X_val)
             self.X_test = self.scaler.transform(self.X_test)
         else:
-            return self.scaler.transform(deployment_data)
+            self.deployment_data = self.scaler.transform(self.deployment_data)
