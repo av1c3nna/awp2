@@ -374,35 +374,34 @@ class Preprocessing:
 
     def remove_outliers(self, df, replace=True):
         """Removes or replaces outliers of the weather data."""
-    #     features = list(df.columns)
-    #     for i in ["ref_time", "val_time", "lat", "long", "forecast_horizon"]:
-    #         if i in features:
-    #             features.remove(i)
+        features = list(df.columns)
+        for i in ["ref_time", "val_time", "lat", "long", "forecast_horizon"]:
+            if i in features:
+                features.remove(i)
                 
-    #     for column in features:
-    #         df[column] = df.groupby("val_time")[column].transform(lambda group: self.remove_outliers_group(group, replace))
+        for column in features:
+            df[column] = df.groupby("val_time")[column].transform(lambda group: self.remove_outliers_group(group, replace))
 
-    #     if not replace:
-    #         df = df.dropna()
+        if not replace:
+            df = df.dropna()
 
-    #     return df
+        return df
     
-    # def remove_outliers_group(self, group, replace):
-    #     """Replaces outliers within a group object."""
-    #     Q1 = group.quantile(0.25)
-    #     Q3 = group.quantile(0.75)
-    #     IQR = Q3 - Q1
-    #     lower_bound = Q1 - 1.5 * IQR
-    #     upper_bound = Q3 + 1.5 * IQR
+    def remove_outliers_group(self, group, replace):
+        """Replaces outliers within a group object."""
+        Q1 = group.quantile(0.25)
+        Q3 = group.quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
 
-    #     if replace:
-    #         mean = group[(group >= lower_bound) & (group <= upper_bound)].mean()
-    #         group = group.where((group >= lower_bound) & (group <= upper_bound), mean)
-    #     else:
-    #         group = group.where((group >= lower_bound) & (group <= upper_bound), np.nan)
+        if replace:
+            mean = group[(group >= lower_bound) & (group <= upper_bound)].mean()
+            group = group.where((group >= lower_bound) & (group <= upper_bound), mean)
+        else:
+            group = group.where((group >= lower_bound) & (group <= upper_bound), np.nan)
 
-    #     return group
-        return df.fillna(0)
+        return group
 
 
     def handle_missing_data(self, df, performance = False):
