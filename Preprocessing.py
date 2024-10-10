@@ -621,9 +621,12 @@ class FeatureEngineerer:
 
     def perform_feature_engineering(self, data, deployment:bool = False, labels_to_remove:list = ["Solar_MWh_credit", "Wind_MWh_credit"]):
 
+
         if deployment:
             deployment_data = data.copy()
         else:
+            self.features_after_fe = [*data.drop(labels_to_remove, axis = 1).columns]
+
             if type(labels_to_remove) != type(list()):
                 labels_to_remove = [labels_to_remove]
             self.labels_to_remove = labels_to_remove
@@ -672,6 +675,9 @@ class FeatureEngineerer:
                 self.ohe = OneHotEncoder(sparse_output = False, handle_unknown = "infrequent_if_exist")
                 self.X_train[self.ohe.get_feature_names_out()] = self.ohe.fit_transform(self.X_train[columns_to_ohe])
                 self.X_train.drop(columns = columns_to_ohe, axis = 1, inplace = True)
+
+                # store the adjusted feature names after fitting the onehotencoder
+                self.features_after_fe = [*data.drop(columns = [*self.labels_to_remove, *self.columns_to_ohe], axis = 1).columns, *self.ohe.get_feature_names_out()]
 
                 self.X_val[self.ohe.get_feature_names_out()] = self.ohe.transform(self.X_val[columns_to_ohe])
                 self.X_val.drop(columns = columns_to_ohe, axis = 1, inplace = True)

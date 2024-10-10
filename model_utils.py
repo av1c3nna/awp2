@@ -5,6 +5,8 @@ import xgboost as xgb
 from sklearn.linear_model import QuantileRegressor
 from sklearn.utils.fixes import parse_version, sp_version
 import joblib
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 def pinball(y, q, alpha):
     return (y - q) * alpha * (y >= q) + (q - y) * (1 - alpha) * (y < q)
@@ -44,15 +46,40 @@ class BaseModel:
             score.append(self.pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean())
         return sum(score) / len(score)
 
-    def plot_intervalls(self, df):
-        pass
+    def plot_quantils(self, x, y, quantiles):
+
+        first_month = x.index[0].month  # Den Monat des ersten Datums nehmen
+        first_month_data = x[x.index.month == first_month]  # Nur die Daten für den ersten Monat filtern
+        filter = len(first_month_data.index)
+        
+        # 2. Filtere die entsprechenden Zeilen aus `y`
+
+        plt.figure(figsize=(10,6))
+        sns.set_style("darkgrid", {"grid.color": ".6", "grid.linestyle": ":"})
+        ax1 = sns.lineplot( x=first_month_data.index, y=y["true"][:filter])
+
+        for quantile in quantiles:
+            sns.lineplot(
+                        x=first_month_data.index,
+                        y=y[str(quantile)][:filter],
+                        color='gray',
+                        alpha=(1-abs(1-quantile)),
+                        label=f'q{quantile}')
+
+        #plt.xlim(x.index.min())
+        plt.xlabel('Date/Time')
+        plt.ylabel('Generation [MWh]')
+        plt.tight_layout()
 
 
 # XGBoost Model Class
 class XGBoostModel(BaseModel):
-    def __init__(self, feature_engineerer, quantiles, model_save_dir, hyperparams=False, load_pretrained=False):
+    def __init__(self, feature_engineerer, quantiles, model_save_dir, hyperparams=False, load_pretrained=False, num_boost_round=250, early_stopping_rounds=10):
         super().__init__(feature_engineerer, quantiles, model_save_dir, load_pretrained)
         
+        self.num_boost_round = num_boost_round
+        self.early_stopping_rounds = early_stopping_rounds
+
         if not hyperparams:
             self.hyperparams = {
             # Use the quantile objective function.
@@ -79,17 +106,17 @@ class XGBoostModel(BaseModel):
         else:
             print(f"No pretrained model found at {model_filename}, training a new model instead.")
 
-    def train_xgboost_model(self, x_train, y_train, x_val, y_val):
+    def train_xgboost_model(self, x_train, y_train, x_val, y_val, feature_names):
         evals_result = {}
-        Xy_train = xgb.QuantileDMatrix(x_train, y_train)
-        Xy_val = xgb.QuantileDMatrix(x_val, y_val, ref=Xy_train)
+        Xy_train = xgb.QuantileDMatrix(x_train, y_train, feature_names = feature_names)
+        Xy_val = xgb.QuantileDMatrix(x_val, y_val, ref=Xy_train, feature_names = feature_names)
 
         # Training XGBoost model
         booster = xgb.train(
             self.hyperparams,  
             Xy_train,
-            num_boost_round=50,
-            early_stopping_rounds=10,
+            num_boost_round=self.num_boost_round,
+            early_stopping_rounds=self.early_stopping_rounds,
             evals=[(Xy_train, "Train"), (Xy_val, "Val")],
             evals_result=evals_result,
         )
@@ -102,7 +129,8 @@ class XGBoostModel(BaseModel):
                 self.feature_engineerer.X_train,
                 self.feature_engineerer.y_train,
                 self.feature_engineerer.X_val,
-                self.feature_engineerer.y_val
+                self.feature_engineerer.y_val,
+                self.feature_engineerer.features_after_fe
             )
 
             # Save the model
