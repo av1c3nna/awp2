@@ -50,9 +50,12 @@ class BaseModel:
 
 # XGBoost Model Class
 class XGBoostModel(BaseModel):
-    def __init__(self, feature_engineerer, quantiles, model_save_dir, hyperparams=False, load_pretrained=False):
+    def __init__(self, feature_engineerer, quantiles, model_save_dir, hyperparams=False, load_pretrained=False, num_boost_round=250, early_stopping_rounds=10):
         super().__init__(feature_engineerer, quantiles, model_save_dir, load_pretrained)
         
+        self.num_boost_round = num_boost_round
+        self.early_stopping_rounds = early_stopping_rounds
+
         if not hyperparams:
             self.hyperparams = {
             # Use the quantile objective function.
@@ -88,8 +91,8 @@ class XGBoostModel(BaseModel):
         booster = xgb.train(
             self.hyperparams,  
             Xy_train,
-            num_boost_round=250,
-            early_stopping_rounds=10,
+            num_boost_round=self.num_boost_round,
+            early_stopping_rounds=self.early_stopping_rounds,
             evals=[(Xy_train, "Train"), (Xy_val, "Val")],
             evals_result=evals_result,
         )
