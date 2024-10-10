@@ -121,11 +121,11 @@ class Preprocessing:
         if fft:
             df = self.add_fft_features(df, columns_to_fft = columns_to_fft)
 
-        if deployment == False:
-            print("Merge with label data...")
+        if "solar_down_rad" in df.columns:
+            print("Merge with energy data...")
             key = next(iter(energy_data_dict))
             energy_df = extractor.combine_files(energy_data_dict[key], key, ".csv")
-            energy_df = self.preprocess_energy_data(energy_df)
+            energy_df = self.preprocess_energy_data(energy_df, deployment = deployment)
             df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge)
         
         print("Preprocessing done!")
@@ -252,8 +252,13 @@ class Preprocessing:
         return df
     
 
-    def preprocess_energy_data(self, df_energy):
+    def preprocess_energy_data(self, df_energy, deployment:bool = False):
         # convert the datetime information to the right format
+        if deployment == False:
+            time_column = "dtm"
+        else:
+            df_energy.rename({"timestamp_utc":"dtm"}, inplace = True)
+
         df_energy["dtm"] = pd.to_datetime(df_energy["dtm"])
         df_energy = df_energy.sort_values("dtm")
 
@@ -263,19 +268,23 @@ class Preprocessing:
         # Fill missing values in df_energy with the corresponding grouped means
         df_energy = df_energy.fillna(grouped_means)
 
-        # convert MW to MWh (30min periods --> multiply by 0.5)
-        for col in ["Solar_MW", "Wind_MW"]:
-            df_energy[col] = 0.5 * df_energy[col]
+        if deployment == False:
+            # convert MW to MWh (30min periods --> multiply by 0.5)
+            for col in ["Solar_MW", "Wind_MW"]:
+                df_energy[col] = 0.5 * df_energy[col]
 
-        df_energy["Wind_MWh_credit"] = df_energy["Wind_MW"] - df_energy["boa_MWh"]
-        df_energy.rename(columns = {"Solar_MW": "Solar_MWh_credit", "Wind_MW": "Wind_MWh"}, inplace = True)
-        df_energy.drop(["Wind_MWh"], axis = 1, inplace = True)
+            df_energy["Wind_MWh_credit"] = df_energy["Wind_MW"] - df_energy["boa_MWh"]
+            df_energy.rename(columns = {"Solar_MW": "Solar_MWh_credit", "Wind_MW": "Wind_MWh", "Solar_installedcapacity_mwp": "installed_capacity_mwp", "Solar_capacity_mwp": "capacity_mwp"}, inplace = True)
+            df_energy.drop(["Wind_MWh"], axis = 1, inplace = True)
 
-        #df_energy["unused_Solar_capacity_mwp"] = df_energy["Solar_installedcapacity_mwp"] = df_energy["Solar_capacity_mwp"]
+            df_energy = df_energy.drop_duplicates()
+            df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit", "installed_capacity_mwp", "capacity_mwp"]]
+        else:
+            df_energy.rename(columns = {"Solar_installedcapacity_mwp": "installed_capacity_mwp", "Solar_capacity_mwp": "capacity_mwp"}, inplace = True)
+            df_energy = df_energy.drop_duplicates()
+            df_energy = df_energy[["dtm", "installed_capacity_mwp", "capacity_mwp"]]
 
-        df_energy = df_energy.drop_duplicates()
-        df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit"]]
-
+        #df_energy["unused_capacity_mwp"] = df_energy["installedcapacity_mwp"] = df_energy["capacity_mwp"]
         return df_energy
 
 
@@ -374,34 +383,35 @@ class Preprocessing:
 
     def remove_outliers(self, df, replace=True):
         """Removes or replaces outliers of the weather data."""
-        features = list(df.columns)
-        for i in ["ref_time", "val_time", "lat", "long", "forecast_horizon"]:
-            if i in features:
-                features.remove(i)
+    #     features = list(df.columns)
+    #     for i in ["ref_time", "val_time", "lat", "long", "forecast_horizon"]:
+    #         if i in features:
+    #             features.remove(i)
                 
-        for column in features:
-            df[column] = df.groupby("val_time")[column].transform(lambda group: self.remove_outliers_group(group, replace))
+    #     for column in features:
+    #         df[column] = df.groupby("val_time")[column].transform(lambda group: self.remove_outliers_group(group, replace))
 
-        if not replace:
-            df = df.dropna()
+    #     if not replace:
+    #         df = df.dropna()
 
-        return df
+    #     return df
     
-    def remove_outliers_group(self, group, replace):
-        """Replaces outliers within a group object."""
-        Q1 = group.quantile(0.25)
-        Q3 = group.quantile(0.75)
-        IQR = Q3 - Q1
-        lower_bound = Q1 - 1.5 * IQR
-        upper_bound = Q3 + 1.5 * IQR
+    # def remove_outliers_group(self, group, replace):
+    #     """Replaces outliers within a group object."""
+    #     Q1 = group.quantile(0.25)
+    #     Q3 = group.quantile(0.75)
+    #     IQR = Q3 - Q1
+    #     lower_bound = Q1 - 1.5 * IQR
+    #     upper_bound = Q3 + 1.5 * IQR
 
-        if replace:
-            mean = group[(group >= lower_bound) & (group <= upper_bound)].mean()
-            group = group.where((group >= lower_bound) & (group <= upper_bound), mean)
-        else:
-            group = group.where((group >= lower_bound) & (group <= upper_bound), np.nan)
+    #     if replace:
+    #         mean = group[(group >= lower_bound) & (group <= upper_bound)].mean()
+    #         group = group.where((group >= lower_bound) & (group <= upper_bound), mean)
+    #     else:
+    #         group = group.where((group >= lower_bound) & (group <= upper_bound), np.nan)
 
-        return group
+    #     return group
+        return df.fillna(0)
 
 
     def handle_missing_data(self, df, performance = False):
