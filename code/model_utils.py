@@ -5,6 +5,8 @@ import xgboost as xgb
 from sklearn.linear_model import QuantileRegressor
 from sklearn.utils.fixes import parse_version, sp_version
 import joblib
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 def pinball(y, q, alpha):
     return (y - q) * alpha * (y >= q) + (q - y) * (1 - alpha) * (y < q)
@@ -44,8 +46,30 @@ class BaseModel:
             score.append(self.pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean())
         return sum(score) / len(score)
 
-    def plot_intervalls(self, df):
-        pass
+    def plot_quantils(self, x, y, quantiles):
+
+        first_month = x.index[0].month  # Den Monat des ersten Datums nehmen
+        first_month_data = x[x.index.month == first_month]  # Nur die Daten für den ersten Monat filtern
+        filter = len(first_month_data.index)
+        
+        # 2. Filtere die entsprechenden Zeilen aus `y`
+
+        plt.figure(figsize=(10,6))
+        sns.set_style("darkgrid", {"grid.color": ".6", "grid.linestyle": ":"})
+        ax1 = sns.lineplot( x=first_month_data.index, y=y["true"][:filter])
+
+        for quantile in quantiles:
+            sns.lineplot(
+                        x=first_month_data.index,
+                        y=y[str(quantile)][:filter],
+                        color='gray',
+                        alpha=(1-abs(1-quantile)),
+                        label=f'q{quantile}')
+
+        #plt.xlim(x.index.min())
+        plt.xlabel('Date/Time')
+        plt.ylabel('Generation [MWh]')
+        plt.tight_layout()
 
 
 # XGBoost Model Class
