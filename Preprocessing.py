@@ -129,18 +129,17 @@ class Preprocessing:
         if merge_with_outage_data and "wind_speed" in df.columns:
             print("Merge with outages data (REMIT)...")
             outage_data = extractor.extract_json_files(json_file_path)
-            outage_data = self.preprocess_outage_data(outage_data)
+            outage_data = self.preprocess_outage_data(outage_data, deployment = deployment)
             df = self.merge_with_outages(df, outage_data)
 
         if fft:
             df = self.add_fft_features(df, columns_to_fft = columns_to_fft)
 
-        if "solar_down_rad" in df.columns:
-            print("Merge with energy data...")
-            key = next(iter(energy_data_dict))
-            energy_df = extractor.combine_files(energy_data_dict[key], key, ".csv")
-            energy_df = self.preprocess_energy_data(energy_df, deployment = deployment)
-            df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge)
+        print("Merge with energy data...")
+        key = next(iter(energy_data_dict))
+        energy_df = extractor.combine_files(energy_data_dict[key], key, ".csv")
+        energy_df = self.preprocess_energy_data(energy_df, deployment = deployment)
+        df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge)
 
         df = df.reindex(sorted(df.columns), axis=1)
         print("Preprocessing done!")
@@ -204,7 +203,7 @@ class Preprocessing:
                 return
     
 
-    def preprocess_outage_data(self, json_data):
+    def preprocess_outage_data(self, json_data, deployment:bool = False):
         # dismissed outages are not relevant
         json_data = json_data[json_data.eventStatus != "Dismissed"]
         # drop those columns since they provide no value as features
@@ -213,7 +212,7 @@ class Preprocessing:
         # drop string value columns with only one unique value. If it´s not used for the deployment, we are in the training phase instead. Search through every column and save their names so during deployment, they will get removed instantly next time.
         # if the preprocessing is used for the deployment, we already know which features provide no information. During deployment we might have to use interference on a single row, so just searching for columns with one unique value can only work
         # during the preprocessing of training data.
-        if self.for_deployment == False:
+        if deployment == False:
             for col in json_data.columns:
                 if json_data[col].nunique() == 1:
                         try:
@@ -675,13 +674,6 @@ class FeatureEngineerer:
 
         if len(self.columns_to_ohe) > 0:
             self.onehotencode(data, deployment = deployment)
-
-        if deployment == False:
-            print("Not Deployment columns")
-            print(self.X_train.columns)
-        else:
-            print("Deployment Columns")
-            print(self.deployment_data.columns)
 
         self.scale(deployment = deployment)
 
