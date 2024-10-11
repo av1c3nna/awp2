@@ -133,7 +133,7 @@ class Preprocessing:
             energy_df = extractor.combine_files(energy_data_dict[key], key, ".csv")
             energy_df = self.preprocess_energy_data(energy_df, deployment = deployment)
             df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge)
-            
+
         df = df.reindex(sorted(df.columns), axis=1)
         print("Preprocessing done!")
 
@@ -290,6 +290,7 @@ class Preprocessing:
         else:
             df_energy.rename(columns = {"Solar_installedcapacity_mwp": "installed_capacity_mwp", "Solar_capacity_mwp": "capacity_mwp"}, inplace = True)
             df_energy = df_energy.drop_duplicates()
+            df_energy["unused_capacity_mwp"] = df_energy["installed_capacity_mwp"] - df_energy["capacity_mwp"]
             df_energy = df_energy[["dtm", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
 
         return df_energy
