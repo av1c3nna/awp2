@@ -133,7 +133,8 @@ class Preprocessing:
             energy_df = extractor.combine_files(energy_data_dict[key], key, ".csv")
             energy_df = self.preprocess_energy_data(energy_df, deployment = deployment)
             df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge)
-        
+            
+        df = df.reindex(sorted(df.columns), axis=1)
         print("Preprocessing done!")
 
         return df
