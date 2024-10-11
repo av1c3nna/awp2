@@ -11,8 +11,13 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler, MinMaxScaler, R
 from sklearn.model_selection import train_test_split, TimeSeriesSplit
 import logging, sys
 
-
+logging.getLogger().setLevel(logging.INFO)
 pd.set_option('future.no_silent_downcasting', True)
+
+import warnings
+import pandas as pd
+from pandas.errors import SettingWithCopyWarning
+warnings.simplefilter(action='ignore', category=(SettingWithCopyWarning))
 
 
 class FileExtractor:
@@ -178,11 +183,16 @@ class Preprocessing:
         if fft:
             df = self.add_fft_features(df, columns_to_fft = columns_to_fft)
 
-        logging.info("Merge with energy data...")
-        key = next(iter(energy_data_dict))
-        energy_df = extractor.combine_files(energy_data_dict[key], key, ".csv")
-        energy_df = self.preprocess_energy_data(energy_df, deployment = deployment)
-        df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge)
+        if (deployment != True) | ("solar_down_rad" in df.columns):
+            logging.info("Merge with energy data...")
+            key = next(iter(energy_data_dict))
+            energy_df = extractor.combine_files(energy_data_dict[key], key, ".csv")
+            if "wind_speed" in df.columns:
+                only_labels = True
+            else:
+                only_labels = False
+            energy_df = self.preprocess_energy_data(energy_df, deployment = deployment, only_labels = only_labels)
+            df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge, deployment = deployment)
 
         # sort the columns alphabetically to avoid errors during the Feature Engineering (aka keep the same order)
         df = df.reindex(sorted(df.columns), axis=1)
@@ -278,6 +288,10 @@ class Preprocessing:
         # drop those columns since they provide no value as features
         json_data.drop(columns = ["id", "outageProfile", "assetId", "affectedUnitEIC", "dataset", "eventStatus", "cause", "publishTime", "createdTime", "relatedInformation", "revisionNumber", "mrid"], axis = 1, inplace = True)
 
+        for col in ["affectedArea", "participantId", "assetType", "biddingZone", "fuelType", "eventType", "messageHeading", "messageType", "registrationCode"]:
+            if col in json_data:
+                json_data.drop(columns = [col], axis = 1, inplace = True)
+        
         # drop string value columns with only one unique value. If it´s not used for the deployment, we are in the training phase instead. Search through every column and save their names so during deployment, they will get removed instantly next time.
         # if the preprocessing is used for the deployment, we already know which features provide no information. During deployment we might have to use interference on a single row, so just searching for columns with one unique value can only work
         # during the preprocessing of training data.
@@ -346,19 +360,22 @@ class Preprocessing:
         return df
     
 
-    def preprocess_energy_data(self, df_energy, deployment:bool = False):
+    def preprocess_energy_data(self, df_energy, deployment:bool = False, only_labels:bool = True):
         """Data cleaning and feature extraction of the energy data.
         
         Parameters:
             - df_energy: energy data as a pandas.DataFrame object which is the result of the extracted files by the FileExtractor class.
             - deployment: if True, will assume there is no available label data and only extract the features.
+            - only_labels: if True, will make sure that during the training phase for wind energy production, only the relevant labels and time information will be extracted.
 
         Returns:
             - df_energy: preprocessed energy data as a pandas.DataFrame object.
         """
         # convert the datetime information to the right format
-        if deployment:
-            df_energy.rename({"timestamp_utc":"dtm"}, inplace = True)
+        df_energy.rename(columns = {"timestamp_utc":"dtm"}, inplace = True)
+
+        if "Unnamed: 0" in df_energy.columns:
+            df_energy.drop(["Unnamed: 0"], axis = 1, inplace = True)
 
         df_energy["dtm"] = pd.to_datetime(df_energy["dtm"])
         df_energy = df_energy.sort_values("dtm")
@@ -376,11 +393,15 @@ class Preprocessing:
 
             df_energy["Wind_MWh_credit"] = df_energy["Wind_MW"] - df_energy["boa_MWh"]
             df_energy.rename(columns = {"Solar_MW": "Solar_MWh_credit", "Wind_MW": "Wind_MWh", "Solar_installedcapacity_mwp": "installed_capacity_mwp", "Solar_capacity_mwp": "capacity_mwp"}, inplace = True)
-            df_energy.drop(["Wind_MWh"], axis = 1, inplace = True)
-            df_energy["unused_capacity_mwp"] = df_energy["installed_capacity_mwp"] - df_energy["capacity_mwp"]
-
             df_energy = df_energy.drop_duplicates()
-            df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
+            df_energy.drop(["Wind_MWh"], axis = 1, inplace = True)
+
+            # for the case, if the preprocessing is set during the training phase, but the weather data is only relevant for the wind energy forecast
+            if only_labels:
+                df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit"]]
+            else:
+                df_energy["unused_capacity_mwp"] = df_energy["installed_capacity_mwp"] - df_energy["capacity_mwp"]
+                df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
         else:
             df_energy.rename(columns = {"Solar_installedcapacity_mwp": "installed_capacity_mwp", "Solar_capacity_mwp": "capacity_mwp"}, inplace = True)
             df_energy = df_energy.drop_duplicates()
@@ -674,12 +695,12 @@ class Preprocessing:
         if "wind_speed" in df.columns:
             # convert wind speed from m/s to km/h
             df["wind_speed"] = df["wind_speed"] * 3.6
-            df["wind_speed_range"] = df["wind_speed_max"] - df["wind_speed_min"]
+            df["wind_speed_range_24h"] = df["wind_speed_max_24h"] - df["wind_speed_min_24h"]
 
         if "wind_speed_100" in df.columns:
             # convert wind speed from m/s to km/h
             df["wind_speed_100"] = df["wind_speed_100"] * 3.6
-            df["wind_speed_100_range"] = df["wind_speed_100_max"] - df["wind_speed_100_min"]
+            df["wind_speed_100_range_24h"] = df["wind_speed_100_max_24h"] - df["wind_speed_100_min_24h"]
             # add the altitude difference in wind speed
             df["wind_speed_altitude_diff"] = df["wind_speed_100"] - df["wind_speed"]
 
@@ -694,11 +715,11 @@ class Preprocessing:
             df.drop(columns = ["wind_dir_100"], axis = 1, inplace = True)
 
         if "solar_down_rad" in df.columns:
-            df["solar_down_rad_range"] = df["solar_down_rad_max"] - df["solar_down_rad_min"]
+            df["solar_down_rad_range_24h"] = df["solar_down_rad_max_24h"] - df["solar_down_rad_min_24h"]
             df["interaction_solar_down_rad_temp"] = df["solar_down_rad"] * df["temp"]
 
         if "temp" in df.columns:
-            df["temp_range"] = df["temp_max"] - df["temp_min"]
+            df["temp_range_24h"] = df["temp_max_24h"] - df["temp_min_24h"]
 
         # add the cyclic encoded features to the dataset.
         for col in ["month", "day", "dayofweek", "hour"]:
@@ -737,7 +758,7 @@ class Preprocessing:
         return math.cos(data)
         
 
-    def merge_geo_energy_outage_data(self, geo_data, energy_data, left_merge:str = "val_time", right_merge:str = "dtm"):
+    def merge_geo_energy_outage_data(self, geo_data, energy_data, left_merge:str = "val_time", right_merge:str = "dtm", deployment:bool = False):
         """Combine the geo data, which is combined with the REMIT data already, with the energy data.
         
         Parameters:
@@ -751,6 +772,15 @@ class Preprocessing:
 
         geo_data = geo_data.reset_index()
 
+        if deployment:
+            main_merge_column = left_merge
+            how_to_merge = "left"
+            merge_column_to_drop = right_merge
+        else:
+            main_merge_column = right_merge
+            how_to_merge = "right"
+            merge_column_to_drop = left_merge
+
         assert left_merge in geo_data.columns, f"{left_merge} not found in geo data."
         assert right_merge in energy_data.columns, f"{right_merge} not found in energy and outage data."
 
@@ -763,8 +793,9 @@ class Preprocessing:
         assert energy_data.shape[0] > 0, "Energy and outage data is empty."
         assert "datetime" in str(geo_data[left_merge].dtype), f"First input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime."
         assert "datetime" in str(energy_data[right_merge].dtype), f"Second input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime."
-
-        merged_data = geo_data.merge(energy_data, left_on = left_merge, right_on = right_merge, how = "right")
+        merged_data = geo_data.merge(energy_data, left_on = left_merge, right_on = right_merge, how = how_to_merge)
+        merged_data = merged_data.bfill()
+        merged_data = merged_data.ffill()
 
         for col in self.non_numerical_columns[:]:
             # check for valid input
@@ -774,20 +805,20 @@ class Preprocessing:
         if len(self.non_numerical_columns) > 0:
             # we aggregate the numerical and non-numerical columns seperately and then combine them
             # mean does not support non-numerical columns
-            aggregated_numerical_cols = merged_data.drop(self.non_numerical_columns, axis = 1).groupby(right_merge).mean()
-            aggregated_string_cols = merged_data[[*self.non_numerical_columns, right_merge]].groupby(right_merge).first()
+            aggregated_numerical_cols = merged_data.drop(self.non_numerical_columns, axis = 1).groupby(main_merge_column).mean()
+            aggregated_string_cols = merged_data[[*self.non_numerical_columns, main_merge_column]].groupby(main_merge_column).first()
             merged_data = aggregated_numerical_cols.merge(aggregated_string_cols, left_index = True, right_index = True)
         # perform this if the data contains only numerical columns
         else:
-            merged_data = merged_data.groupby(right_merge).mean()
-            if right_merge in merged_data.columns:
-                merged_data = merged_data.set_index(right_merge)
+            merged_data = merged_data.groupby(main_merge_column).mean()
+            if main_merge_column in merged_data.columns:
+                merged_data = merged_data.set_index(main_merge_column)
 
         merged_data = merged_data.drop_duplicates()
         merged_data = merged_data.dropna(axis = 0)
 
-        if left_merge in merged_data.columns:
-            merged_data.drop(columns = [left_merge], axis = 1, inplace = True)
+        if merge_column_to_drop in merged_data.columns:
+            merged_data.drop(columns = [merge_column_to_drop], axis = 1, inplace = True)
 
         return merged_data
     
@@ -826,7 +857,7 @@ class Preprocessing:
             - data: output data.
         """
         for column in columns_to_fft:
-            print(f"Apply FFT on {column}...")
+            logging.info(f"Apply FFT on {column}...")
             if column in data.columns:
                 for date in data.groupby(data.index.date).max().index:
                     data.loc[data.index.date == date, f"{column}_fft"] = np.abs(np.fft.fft(data.loc[data.index.date == date, f"{column}"]))
@@ -839,7 +870,7 @@ class FeatureEngineerer:
     """Performs the feature engineering steps such as train-val-test-splits, onehotencoding non-numerical columns and scaling the data. """
     
     def __init__(self, label:str = "Solar_MWh_credit", labels_to_remove:list = ["Solar_MWh_credit", "Wind_MWh_credit"], 
-                 columns_to_ohe:list = list(), train_ratio:float = 0.7, val_ratio:float = 0.2, test_ratio:float = 0.1, scaler_name:str = "standard"):
+                 columns_to_ohe:str = ['unavailabilityType', 'affectedUnit', 'outage'], train_ratio:float = 0.7, val_ratio:float = 0.2, test_ratio:float = 0.1, scaler_name:str = "standard"):
         assert train_ratio + val_ratio + test_ratio <= 1, "Train, validation and test data ratio can only equal to 1 as a sum."
 
         self.label = label
@@ -910,42 +941,41 @@ class FeatureEngineerer:
             self.y_train, self.y_val = y_train_val.iloc[train_index], y_train_val.iloc[val_index]
 
 
-    def onehotencode(self, data, columns_to_ohe:str = ['unavailabilityType', 'affectedUnit', 'outage'], deployment:bool = False):
+    def onehotencode(self, data, deployment:bool = False):
         """Perform a onehotencoding. For the training phase, it will create and fit a OneHotEncoder. During deployment, it will assume a OneHotEncoder has been fitted and will be called.
         
         Parameters:
             - data: input data.
-            - columns_to_ohe: columns to compute the onehotencoding on. Will be checked for validity in case there are names which don´t exist in the dataset.
             - deployment: if True, will assume a OneHotEncoder exists and will be used. Otherwise will create and fit a OneHotEncoder.
         Returns:
             - data: output data, if no columns are found to be onehotencoded. Otherwise None.
         """
         # check for valid input for columns to onehotencode
-        if len(columns_to_ohe) > 0:
-            for column in columns_to_ohe[:]:
+        if len(self.columns_to_ohe) > 0:
+            for column in self.columns_to_ohe[:]:
                 if column not in data.columns:
                     self.columns_to_ohe.remove(column)
         
         if len(self.columns_to_ohe) > 0:
             if deployment == False:
                 self.ohe = OneHotEncoder(sparse_output = False, handle_unknown = "infrequent_if_exist")
-                self.X_train[self.ohe.get_feature_names_out()] = self.ohe.fit_transform(self.X_train[columns_to_ohe])
-                self.X_train.drop(columns = columns_to_ohe, axis = 1, inplace = True)
+                self.X_train[self.ohe.get_feature_names_out()] = self.ohe.fit_transform(self.X_train[self.columns_to_ohe])
+                self.X_train.drop(columns = self.columns_to_ohe, axis = 1, inplace = True)
 
                 # store the adjusted feature names after fitting the onehotencoder
                 self.features_after_fe = [*data.drop(columns = [*self.labels_to_remove, *self.columns_to_ohe], axis = 1).columns, *self.ohe.get_feature_names_out()]
 
-                self.X_val[self.ohe.get_feature_names_out()] = self.ohe.transform(self.X_val[columns_to_ohe])
-                self.X_val.drop(columns = columns_to_ohe, axis = 1, inplace = True)
+                self.X_val[self.ohe.get_feature_names_out()] = self.ohe.transform(self.X_val[self.columns_to_ohe])
+                self.X_val.drop(columns = self.columns_to_ohe, axis = 1, inplace = True)
 
-                self.X_test[self.ohe.get_feature_names_out()] = self.ohe.transform(self.X_test[columns_to_ohe])
-                self.X_test.drop(columns = columns_to_ohe, axis = 1, inplace = True)
+                self.X_test[self.ohe.get_feature_names_out()] = self.ohe.transform(self.X_test[self.columns_to_ohe])
+                self.X_test.drop(columns = self.columns_to_ohe, axis = 1, inplace = True)
             else:
-                data[self.ohe.get_feature_names_out()] = self.ohe.transform(data[columns_to_ohe])
-                data.drop(columns = columns_to_ohe, axis = 1, inplace = True)
+                data[self.ohe.get_feature_names_out()] = self.ohe.transform(data[self.columns_to_ohe])
+                data.drop(columns = self.columns_to_ohe, axis = 1, inplace = True)
                 self.deployment_data = data
         else:
-            print("No features found to onehotencode.")
+            logging.info("No features found to onehotencode.")
             return data
 
     
