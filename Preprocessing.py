@@ -836,6 +836,8 @@ class Preprocessing:
 
 
 class FeatureEngineerer:
+    """Performs the feature engineering steps such as train-val-test-splits, onehotencoding non-numerical columns and scaling the data. """
+    
     def __init__(self, label:str = "Solar_MWh_credit", labels_to_remove:list = ["Solar_MWh_credit", "Wind_MWh_credit"], 
                  columns_to_ohe:list = list(), train_ratio:float = 0.7, val_ratio:float = 0.2, test_ratio:float = 0.1, scaler_name:str = "standard"):
         assert train_ratio + val_ratio + test_ratio <= 1, "Train, validation and test data ratio can only equal to 1 as a sum."
@@ -849,11 +851,20 @@ class FeatureEngineerer:
         self.scaler_name = scaler_name
 
     def perform_feature_engineering(self, data, deployment:bool = False, labels_to_remove:list = ["Solar_MWh_credit", "Wind_MWh_credit"]):
-
+        """Main method to call the methods necessary for the feature engineering process.
+        
+        Parameters:
+            - data: output data from the preprocessing steps.
+            - deployment: if True, will skip train-val-test-splits and avoid fitting the OneHotEncoder and Scaler.
+            - labels_to_remove: list of columns which should be treated as labels. Will be ignored if deployment is set to True.
+        Returns:
+            None. Will store data instead under self.X_train, self.X_val, self.X_test, self.y_train, self.y_val and self.y_test if deployment is set to False and otherwise under self.deployment_data.
+        """
 
         if deployment:
             self.deployment_data = data.copy()
         else:
+            # relevant for plotting methods in model_utils.py
             self.features_after_fe = [*data.drop(labels_to_remove, axis = 1).columns]
 
             if type(labels_to_remove) != type(list()):
@@ -879,6 +890,13 @@ class FeatureEngineerer:
 
 
     def train_val_test_split(self, data):
+        """Perform a train-validation-test split on given input data.
+        
+        Parameters:
+            - data: input data.
+        Returns:
+            None.
+        """
         ts = TimeSeriesSplit(n_splits = 5)
         # the last 10% of the dataset will be used for the test data set
         X_train_val = data.drop(self.labels_to_remove, axis = 1).iloc[:int(data.shape[0] * (1 - self.test_ratio)), :]
@@ -893,6 +911,15 @@ class FeatureEngineerer:
 
 
     def onehotencode(self, data, columns_to_ohe:str = ['unavailabilityType', 'affectedUnit', 'outage'], deployment:bool = False):
+        """Perform a onehotencoding. For the training phase, it will create and fit a OneHotEncoder. During deployment, it will assume a OneHotEncoder has been fitted and will be called.
+        
+        Parameters:
+            - data: input data.
+            - columns_to_ohe: columns to compute the onehotencoding on. Will be checked for validity in case there are names which don´t exist in the dataset.
+            - deployment: if True, will assume a OneHotEncoder exists and will be used. Otherwise will create and fit a OneHotEncoder.
+        Returns:
+            - data: output data, if no columns are found to be onehotencoded. Otherwise None.
+        """
         # check for valid input for columns to onehotencode
         if len(columns_to_ohe) > 0:
             for column in columns_to_ohe[:]:
@@ -923,6 +950,14 @@ class FeatureEngineerer:
 
     
     def scale(self, deployment:bool = False):
+        """Scale the data. For the training phase, it will create and fit a Scaler. During deployment, it will assume a Scaler has been fitted and will be called.
+        
+        Parameters:
+            - data: input data.
+            - deployment: if True, will assume a Scaler exists and will be used. Otherwise will create and fit a Scaler.
+        Returns:
+            - None.
+        """
         if deployment == False:
             self.X_train = self.scaler.fit_transform(self.X_train)
             self.X_val = self.scaler.transform(self.X_val)
