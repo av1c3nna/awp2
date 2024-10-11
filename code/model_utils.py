@@ -58,6 +58,7 @@ class BaseModel:
         y["date"] = daterange
         plot_df = pd.DataFrame(y)
 
+        sns.set_style("whitegrid")
 
         if period == "month":
             data = plot_df[(plot_df.date.dt.year == year) & (plot_df.date.dt.month == month)]  # Nur die Daten für den ersten Monat filtern
@@ -68,8 +69,7 @@ class BaseModel:
         # 2. Filtere die entsprechenden Zeilen aus `y`
 
         plt.figure(figsize=(10,6))
-        sns.set_style("darkgrid", {"grid.color": ".6", "grid.linestyle": ":"})
-        ax1 = sns.lineplot( x=data.date, y=data["true"])
+        sns.lineplot( x=data.date, y=data["true"], label="True")
 
         for quantile in quantiles:
             sns.lineplot(
