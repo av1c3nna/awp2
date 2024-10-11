@@ -11,6 +11,7 @@ import warnings
 import lightgbm as lgb
 from lightgbm import early_stopping, log_evaluation
 import matplotlib.dates as mdates
+from datetime import datetime, date
 
 
 def pinball(y, q, alpha):
@@ -51,7 +52,7 @@ class BaseModel:
             score.append(self.pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean())
         return sum(score) / len(score)
 
-    def plot_quantils(self, daterange, y, quantiles, period="month", year = 2024, month=1, day=7):
+    def plot_quantils(self, daterange, y, quantiles, year = 2023, month=8, day=False):
 
         warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -60,10 +61,10 @@ class BaseModel:
 
         sns.set_style("whitegrid")
 
-        if period == "month":
-            data = plot_df[(plot_df.date.dt.year == year) & (plot_df.date.dt.month == month)]  # Nur die Daten für den ersten Monat filtern
         
-        if period == "day":
+        data = plot_df[(plot_df.date.dt.year == year) & (plot_df.date.dt.month == month)]  # Nur die Daten für den ersten Monat filtern
+        
+        if day:
             data = plot_df[(plot_df.date.dt.year == year) & (plot_df.date.dt.month == month) & (plot_df.date.dt.day == day)]
         
         # 2. Filtere die entsprechenden Zeilen aus `y`
@@ -78,9 +79,15 @@ class BaseModel:
                         color='gray',
                         alpha=(1-abs(1-quantile)),
                         label=f'q{quantile}')
-        if period == "day":
+        if day:
             plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H'))
-        #plt.xlim(x.index.min())
+            date = datetime(year, month, day)
+            formatted_date = date.strftime("%d/%m/%Y")
+        else:
+            date = datetime(year, month, 1)
+            formatted_date = date.strftime("%B %Y")
+        
+        plt.title(f"Energy-Generation on {formatted_date}")
         plt.xlabel('Date/Time')
         plt.ylabel('Generation [MWh]')
         plt.tight_layout()
