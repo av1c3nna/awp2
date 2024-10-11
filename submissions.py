@@ -13,16 +13,15 @@ class AutoSubmitter:
     def fetch_data(self): # Für die Models nur Wetterdaten für nächsten Tag von 23:00 bis 23:00 Uhr fetchen
 
         if self.model == "hornsea_1":
-            energy_fetched = self.rebase_api_client.get_variable(day="2024-10-11", variable="wind_total_production").rename({"timestamp_utc": "dtm"}, axis=1)
             dwd_fetched = comp_utils.RebaseAPI.get_hornsea_dwd(self.rebase_api_client)
             gfs_fetched = comp_utils.RebaseAPI.get_hornsea_gfs(self.rebase_api_client)
 
         if self.model == "pes":
             energy_fetched = self.rebase_api_client.get_variable(day="2024-10-11", variable="solar_total_production").rename({"timestamp_utc": "dtm"}, axis=1)
+            energy_fetched.to_csv("energy_data/energy_fetched.csv")
             dwd_fetched = comp_utils.RebaseAPI.get_pes10_nwp(self.rebase_api_client, model="DWD_ICON-EU")
             gfs_fetched = comp_utils.RebaseAPI.get_pes10_nwp(self.rebase_api_client, model="NCEP_GFS")
         
-        energy_fetched.to_csv("energy_data/energy_fetched.csv")
         dwd_fetched = comp_utils.weather_df_to_xr(dwd_fetched).to_dataframe()
         gfs_fetched = comp_utils.weather_df_to_xr(gfs_fetched).to_dataframe()
         self.data.update({"dwd_fetched": dwd_fetched, "gfs_fetched": gfs_fetched})
