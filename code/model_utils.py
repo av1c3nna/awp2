@@ -10,6 +10,7 @@ import seaborn as sns
 import warnings 
 import lightgbm as lgb
 from lightgbm import early_stopping, log_evaluation
+import matplotlib.dates as mdates
 
 
 def pinball(y, q, alpha):
@@ -50,28 +51,35 @@ class BaseModel:
             score.append(self.pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean())
         return sum(score) / len(score)
 
-    def plot_quantils(self, x, y, quantiles):
+    def plot_quantils(self, daterange, y, quantiles, period="month", year = 2024, month=1, day=7):
 
         warnings.filterwarnings("ignore", category=FutureWarning)
 
-        first_month = x.index[0].month  # Den Monat des ersten Datums nehmen
-        first_month_data = x[x.index.month == first_month]  # Nur die Daten für den ersten Monat filtern
-        filter = len(first_month_data.index)
+        y["date"] = daterange
+        plot_df = pd.DataFrame(y)
+
+
+        if period == "month":
+            data = plot_df[(plot_df.date.dt.year == year) & (plot_df.date.dt.month == month)]  # Nur die Daten für den ersten Monat filtern
+        
+        if period == "day":
+            data = plot_df[(plot_df.date.dt.year == year) & (plot_df.date.dt.month == month) & (plot_df.date.dt.day == day)]
         
         # 2. Filtere die entsprechenden Zeilen aus `y`
 
         plt.figure(figsize=(10,6))
         sns.set_style("darkgrid", {"grid.color": ".6", "grid.linestyle": ":"})
-        ax1 = sns.lineplot( x=first_month_data.index, y=y["true"][:filter])
+        ax1 = sns.lineplot( x=data.date, y=data["true"])
 
         for quantile in quantiles:
             sns.lineplot(
-                        x=first_month_data.index,
-                        y=y[str(quantile)][:filter],
+                        x=data.date,
+                        y=data[str(quantile)],
                         color='gray',
                         alpha=(1-abs(1-quantile)),
                         label=f'q{quantile}')
-
+        if period == "day":
+            plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H'))
         #plt.xlim(x.index.min())
         plt.xlabel('Date/Time')
         plt.ylabel('Generation [MWh]')
