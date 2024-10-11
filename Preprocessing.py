@@ -354,6 +354,9 @@ class Preprocessing:
                 if df["val_time"].dt.tz is None:
                     df["val_time"] = df["val_time"].dt.tz_localize("UTC")
                 df["forecast_horizon"] = (df["val_time"] - df["ref_time"]).div(pd.Timedelta("1h"))
+        else:
+            df["forecast_horizon"] = (df["val_time"] - df["ref_time"]).div(pd.Timedelta("1h"))
+
 
         # remove forecasts which extend beyond the day ahead, since they will be outdated the next day anyway
         df = df[(df["val_time"] - df["ref_time"]).div(pd.Timedelta("1h")) < 50]
@@ -664,6 +667,13 @@ class FeatureEngineerer:
 
         if len(self.columns_to_ohe) > 0:
             self.onehotencode(data, deployment = deployment)
+
+        if deployment == False:
+            print("Not Deployment columns")
+            print(self.X_train.columns)
+        else:
+            print("Deployment Columns")
+            print(self.deployment_data.columns)
 
         self.scale(deployment = deployment)
 
