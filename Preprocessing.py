@@ -9,6 +9,7 @@ from datetime import datetime
 from math import sin, cos, pi
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, MinMaxScaler, RobustScaler
 from sklearn.model_selection import train_test_split, TimeSeriesSplit
+import logging, sys
 
 
 pd.set_option('future.no_silent_downcasting', True)
@@ -101,14 +102,21 @@ class Preprocessing:
         extractor = FileExtractor()
         self.non_numerical_columns = non_numerical_columns
 
-        if deployment == False:
+        # if the values in the weather data dict contains string values, it is interpreted as a file path. Read the files from the path
+        if type(list(geo_data_dict.values())[0]) == type(str()):
             for file_name_pattern, file_path in geo_data_dict.items():
                 weather_data.append(extractor.combine_files(file_path, file_name_pattern, ".nc"))
-        else:
-            #geo_data_dict = {"dwd": DataFrame, "ncep": DataFrame}
+        # otherwise, the values will be interpreted as DataFrames
+        elif type(list(geo_data_dict.values())[0]) == type(pd.DataFrame()):
+            assert "dwd" in geo_data_dict.keys(), "geo_data_dict expects 'dwd' and 'ncep' as corresponding keys for the DWD and NCEP weather data."
+            assert "ncep" in geo_data_dict.keys(), "geo_data_dict expects 'dwd' and 'ncep' as corresponding keys for the DWD and NCEP weather data."
+
             weather_data.append(geo_data_dict["dwd"])
             weather_data.append(geo_data_dict["ncep"])
-
+        else:
+            logging.critical("Input must be either a file path or a pandas.DataFrame object.")
+            sys.exit(0)
+            
         print("Perform data cleaning on the weather data...")
         for index in range(0, len(weather_data)):
             weather_data[index] = self.preprocess_geo_data(weather_data[index])
