@@ -16,11 +16,21 @@ pd.set_option('future.no_silent_downcasting', True)
 
 
 class FileExtractor:
+    """Helps at reading and extracting files for the preprocessing. It expects the file formats .nc, .csv or .json."""
+
     def __init__(self):
         pass
 
 
     def extract_json_files(self, path):
+        """Combines all JSON files in a given path (only on the surface level, no subfolders) into a single pandas.Dataframe.+
+        
+        Parameters:
+            - path: a String object containing the location of the files.
+
+        Returns:
+            - json_data: pandas.DataFrame containing the JSON data.
+        """
 
         json_data = None
 
@@ -38,8 +48,19 @@ class FileExtractor:
     
 
     def combine_files(self, path, file_name, file_format:str=".nc"):
-        """Combine files of the same dataset with different timestamps. Converts them into a dataframe."""
+        """Combine files of the same type of file name pattern with different timestamps. Converts them into a dataframe.
+        
+        Parameters:
+            - path: a String object containing the location of the files.
+            - file_name: file name pattern of the files (they should have one in common, e.g. 'dwd_icon_eu_hornsea')
+            - file_format: the format of the files to extract.
 
+        Returns:
+            - df_total: pandas.DataFrame containing the extracted data.
+        
+        """
+
+        # outage data is encoded in .json files
         if file_format.lower() == ".json":
             return self.extract_json_files(path)
 
@@ -49,11 +70,13 @@ class FileExtractor:
         all_dfs = list()
 
         for file in os.listdir(path):
+            # check for files with the file name pattern
             if file.endswith(file_format) and file_name.lower() in file.lower(): 
+                # weather data is encoded in .nc files
                 if file_format == ".nc":
                     ds = xarray.open_dataset(path + "/" + file)
                     df_new = ds.to_dataframe()
-
+                    # the weather data has different indices and orders of index names which need to be sorted.
                     try:
                         if len(df_new.index[0]) == 3:
                             df_new = df_new.reorder_levels(["ref_datetime", "valid_datetime", "point"])
@@ -74,7 +97,7 @@ class FileExtractor:
                             df_new = df_new.reorder_levels(["reference_time", "valid_time"])
 
                     all_dfs.append(df_new)
-
+                # energy data is encoded in .csv files
                 elif file_format == ".csv":
                     df = pd.read_csv(path + "/" + file)
                     all_dfs.append(df)
@@ -86,9 +109,9 @@ class FileExtractor:
 
 
 class Preprocessing:
+    """Contains the data cleaning and feature extraction for the datasets. Includes various preprocessing steps like handling invalid values and outliers, computing aggregations and combining different datasets."""
 
-    def __init__(self, for_deployment:bool = False):
-        self.for_deployment = for_deployment
+    def __init__(self):
         self.irrelevant_features = list()
 
 
@@ -98,6 +121,26 @@ class Preprocessing:
                                        non_numerical_columns:list = ["unavailabilityType", "affectedUnit"],
                                        fft:bool = False, columns_to_fft:list = ["temp_diff", "solar_down_rad_diff", "wind_speed_diff", "wind_speed_100_diff"],
                                        deployment:bool = True, energy_data_dict:dict = dict(), left_merge:str = "val_time", right_merge:str = "dtm"):
+        """The main method which calls upon all the other methods necessary for completing the preprocessing pipeline.
+        
+        Parameters:
+            - geo_data_dict: dictionary object which contains the file name pattern as a key and the corresponding file path as a value. Since multiple files might be in the same path, the path is considered here as the value.
+                            The values can also consist of pandas.DataFrames, which will lead to skipping the file reading step with the FIleExtractor class.
+            - aggregate_by_ref_time_too: if True, aggregates additionally by the reference time of weather forecasts, otherwise the aggregation will only be by the valid time of the forecast.
+            - merge_with_outage_data: if True, merges with the REMIT data containing information about outages at the HORNSEA wind farm (stored as JSON files).
+            - json_file_path: file location of the REMIT data. Should be a valid path if merge_with_outage_data is set to True. Will be ignored, if merge_with_outage_data is set to False.
+            - non_numerical_columns: list of non-numerical columns. Necessary to specify since the aggregation steps for non-numerical columns occur differently from the aggregation of numerical ones.
+            - fft: if True, adds features which are the result of a Fast Fourier Transformation (FFT) on specific features in the dataset.
+            - columns_to_fft: columns which the FFT is supposed to be computed on. If fft is set to False, this will be ignored.
+            - deployment: if True, the preprocessing will expect no available label data and adjusts the preprocessing.
+            - energy_data_dict: same structure as the geo_data_dict, except it does not expect pandas DataFrames as values. Contains file name patterns and file paths for the energy data.
+            - left_merge: column to use for combining the weather data with other datasets (REMIT data and energy data)
+            - right_merge: column to use for combining the energy data with the weather and REMIT data
+
+        Returns:
+            - df: preprocessed pandas.DataFrame object
+        """
+
         weather_data = list()
         extractor = FileExtractor()
         self.non_numerical_columns = non_numerical_columns
@@ -117,17 +160,17 @@ class Preprocessing:
             logging.critical("Input must be either a file path or a pandas.DataFrame object.")
             sys.exit(0)
             
-        print("Perform data cleaning on the weather data...")
+        logging.info("Perform data cleaning on the weather data...")
         for index in range(0, len(weather_data)):
             weather_data[index] = self.preprocess_geo_data(weather_data[index])
 
-        print("Merge weather stations...")
+        logging.info("Merge weather stations...")
         df = self.merge_weather_stations_data(weather_data_1 = weather_data[0], weather_data_2 = weather_data[1], aggregate_by = aggregate_by, aggregate_by_ref_time_too = aggregate_by_ref_time_too)
         df = self.add_difference_features(df)
 
         # the outage data contains information only relevant about the HORNSEA wind park. Thus, it is only relevant for data regarding the wind power forecast.
         if merge_with_outage_data and "wind_speed" in df.columns:
-            print("Merge with outages data (REMIT)...")
+            logging.info("Merge with outages data (REMIT)...")
             outage_data = extractor.extract_json_files(json_file_path)
             outage_data = self.preprocess_outage_data(outage_data, deployment = deployment)
             df = self.merge_with_outages(df, outage_data)
@@ -135,41 +178,58 @@ class Preprocessing:
         if fft:
             df = self.add_fft_features(df, columns_to_fft = columns_to_fft)
 
-        print("Merge with energy data...")
+        logging.info("Merge with energy data...")
         key = next(iter(energy_data_dict))
         energy_df = extractor.combine_files(energy_data_dict[key], key, ".csv")
         energy_df = self.preprocess_energy_data(energy_df, deployment = deployment)
         df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge)
 
+        # sort the columns alphabetically to avoid errors during the Feature Engineering (aka keep the same order)
         df = df.reindex(sorted(df.columns), axis=1)
-        print("Preprocessing done!")
+        logging.info("Preprocessing done!")
 
         return df
 
 
     def cyclic_sin(self, n):
+        """Performs a cyclic sine conversion on a number.
+        
+        Parameters:
+            - n: input value
+        Returns:
+            - theta: output value.
+        
+        """
         theta = 2 * pi * n
         return sin(theta)
 
 
     def cyclic_cos(self, n):
+        """Performs a cyclic cosine conversion on a number.
+        
+        Parameters:
+            - n: input value
+        Returns:
+            - theta: output value.
+        
+        """
         theta = 2 * pi * n
         return cos(theta)
 
 
     def get_cycles(self, d, sin_or_cos:int, time_information:str):
-        '''
-        Get the cyclic properties of a datetime,
-        represented as points on the unit circle.
-        Arguments
-        ---------
-        d : datetime object
-        Returns
-        -------
-        dictionary of sine and cosine tuples
+        """
+        Get the cyclic properties of a datetime,represented as points on the unit circle.
 
-        source: https://medium.com/@dan.allison/how-to-encode-the-cyclic-properties-of-time-with-python-6f4971d245c0
-        '''
+        Parameters:
+            - d: datetime object
+            - sin_or_cos: value to decide if cyclic_sin (if 0) or cyclic_cos (if 1) shall be called
+            - time_information: name of the time information (e.g. 'month')
+        Returns:
+            transformed values.
+
+        Source of the implementation of this method: https://medium.com/@dan.allison/how-to-encode-the-cyclic-properties-of-time-with-python-6f4971d245c0
+        """
         month = d.month - 1
         day = d.day - 1
 
@@ -204,6 +264,15 @@ class Preprocessing:
     
 
     def preprocess_outage_data(self, json_data, deployment:bool = False):
+        """Performs data cleaning and feature extraction on the REMIT data.
+        
+        Parameters:
+            - json_data: pandas.DataFrame containing the data which has been extracted from the JSON files by a FileExtractor class object.
+            - deployment: handles the data as unknown (test) data if set to True.
+        
+        Returns:
+            - outages_df: preprocessed REMIT data as a pandas.DataFrame object.
+        """
         # dismissed outages are not relevant
         json_data = json_data[json_data.eventStatus != "Dismissed"]
         # drop those columns since they provide no value as features
@@ -214,6 +283,7 @@ class Preprocessing:
         # during the preprocessing of training data.
         if deployment == False:
             for col in json_data.columns:
+                # remove columns which contain only one unique value.
                 if json_data[col].nunique() == 1:
                         try:
                             json_data.drop(columns = col, inplace = True, axis = 1)
@@ -221,6 +291,7 @@ class Preprocessing:
                         except:
                             continue
         else:
+            # irrelevant_features stores any features which contained only one unique value in the training data. They will be removed during deployment.
             if len(self.irrelevant_features) > 0:
                 json_data.drop(columns = self.irrelevant_features, axis = 1, inplace = True)
 
@@ -239,7 +310,6 @@ class Preprocessing:
             json_data_with_date_ranges = json_data_with_date_ranges.infer_objects(copy=False)
             outages_df = pd.concat([outages_df, json_data_with_date_ranges])
 
-
         # create new features for the outages
         outages_df["hoursSinceOutage"] = (outages_df.index - outages_df.eventStartTime).div(pd.Timedelta("1h"))
         outages_df["hoursUntilOutageEnd"] = (outages_df.eventEndTime - outages_df.index).div(pd.Timedelta("1h"))
@@ -255,6 +325,16 @@ class Preprocessing:
     
 
     def merge_with_outages(self, df, outage_data):
+        """Merge weather data with REMIT data and extract some new features.
+        
+        Parameters:
+            - df: weather data as a pandas.DataFrame object.
+            - outage_data: REMIT data as a pandas.DataFrame object.
+        Returns:
+            - df: merged data as a pandas.DataFrame object.
+        """
+        
+        # the REMIT data has not the same time intervals as the weather data. Thus, an approximative merge is used.
         df = pd.merge_asof(left = df, right = outage_data.sort_index(), left_index = True, right_index = True, direction = "nearest", tolerance = pd.Timedelta("30m"))
 
         # the merge will result in NA values (since outages are not present all the time), thus they have to be filled with replacement values
@@ -267,10 +347,17 @@ class Preprocessing:
     
 
     def preprocess_energy_data(self, df_energy, deployment:bool = False):
+        """Data cleaning and feature extraction of the energy data.
+        
+        Parameters:
+            - df_energy: energy data as a pandas.DataFrame object which is the result of the extracted files by the FileExtractor class.
+            - deployment: if True, will assume there is no available label data and only extract the features.
+
+        Returns:
+            - df_energy: preprocessed energy data as a pandas.DataFrame object.
+        """
         # convert the datetime information to the right format
-        if deployment == False:
-            time_column = "dtm"
-        else:
+        if deployment:
             df_energy.rename({"timestamp_utc":"dtm"}, inplace = True)
 
         df_energy["dtm"] = pd.to_datetime(df_energy["dtm"])
@@ -304,6 +391,15 @@ class Preprocessing:
 
 
     def preprocess_geo_data(self, df):
+        """Data cleaning and feature extraction of the weather data.
+        
+        Parameters:
+            - df: weather data as a pandas.DataFrame object which is the result of the extracted files by the FileExtractor class.
+
+        Returns:
+            - df: preprocessed weather data as a pandas.DataFrame object.
+        """
+
         df = self.clean_geo_data(df)
         df = self.add_statistical_data(df)
         df = self.add_other_features(df)
@@ -318,6 +414,14 @@ class Preprocessing:
 
 
     def clean_geo_data(self, df):
+        """Data cleaning of the weather data. Includes correct type formatting, renaming columns and removing outliers and missing data.
+        
+        Parameters:
+            - df: weather data.
+        
+        Returns:
+            - df: cleaned weather data.
+        """
         # reset the index (reference_time, valid_time, latitude, longitude)
         df.reset_index(inplace = True)
 
@@ -400,7 +504,15 @@ class Preprocessing:
 
 
     def remove_outliers(self, df, replace=True):
-        """Removes or replaces outliers of the weather data."""
+        """Removes or replaces outliers of the weather data.
+        
+        Parameters:
+            - df: weather data.
+            - replace: if True, replaces outliers with other values.
+        
+        Returns:
+            - df: cleaned weather data.
+        """
         features = list(df.columns)
         for i in ["ref_time", "val_time", "lat", "long", "forecast_horizon"]:
             if i in features:
@@ -416,7 +528,15 @@ class Preprocessing:
     
     
     def remove_outliers_group(self, group, replace):
-        """Replaces outliers within a group object."""
+        """Replaces outliers within a group object.
+        
+        Parameters:
+            - df: weather data.
+            - replace: if True, will replace outliers with other values.
+        
+        Returns:
+            - df: cleaned weather data.
+        """
         Q1 = group.quantile(0.25)
         Q3 = group.quantile(0.75)
         IQR = Q3 - Q1
@@ -433,6 +553,15 @@ class Preprocessing:
 
 
     def handle_missing_data(self, df, performance = False):
+        """Replace missing values in the data.
+        
+        Parameters:
+            - df: weather data.
+            - performance: if True, will approach a different handling of the missing values with a lower computation time.
+        
+        Returns:
+            - df: cleaned weather data.
+        """
         
         if not performance:
             
@@ -440,7 +569,7 @@ class Preprocessing:
             cols_with_nan = df.columns[df.isna().any()].tolist()
             
             for col in cols_with_nan:
-                # Group and interpolate each column individually
+                # group and interpolate each column individually
                 df[col] = df.groupby(['forecast_horizon', 'lat_lon_combination'])[col].transform(
                     lambda group: group.interpolate(method='linear') if group.notna().sum() > 1 else group
                 )
@@ -449,25 +578,35 @@ class Preprocessing:
             mask = df.isna().any(axis=1)
         
             if mask.any():
-                # Gruppiere nach Jahr, Monat und Stunde und berechne den Mittelwert für numerische Spalten
+                # group and aggregate values by the year, month and hour
                 grouped_means = df.groupby([df.val_time.dt.year, df.val_time.dt.month, df.val_time.dt.hour])[cols_with_nan].transform('mean')
 
-                # Fülle die verbliebenen NaN-Werte mit den berechneten Mittelwerten
+                # fill NA values with the means
                 df[mask] = df[mask].fillna(grouped_means)
 
         if performance:
 
             mask = df.isna().any(axis=1)
-            # Group by year, month, and hour, then calculate the mean
+            # group by year, month, and hour, then calculate the mean
             grouped_means = df.groupby([df.val_time.dt.year, df.val_time.dt.month, df.val_time.dt.hour]).transform('mean')
-            # Fill missing values using the grouped means
+            # fill missing values using the grouped means
             df[mask] = df[mask].fillna(grouped_means)
 
         return df
     
 
     def merge_weather_stations_data(self, weather_data_1, weather_data_2, aggregate_by:str = "val_time", aggregate_by_ref_time_too:bool = True):
-        """Merge the weather data from the DWD and NCEP weather stations."""
+        """Merge the weather data from the DWD and NCEP weather stations and perform a resampling and interpolation for 30min intervals.
+        
+        Parameters:
+            - weather_data_1: first weather data set.
+            - weather_data_2: second weather data set.
+            - aggregate_by: column to to use for the aggregation of the combined data set.
+            - aggregate_by_ref_time_too: if True, will aggregate by the reference time of a weather forecast as well.
+
+        Returns:
+            - weather_data: combined and aggregated dataset.
+        """
 
         assert aggregate_by in weather_data_1.columns, f"Dimension {aggregate_by} to aggregate by was not found in the first dataset."
         assert aggregate_by in weather_data_2.columns, f"Dimension {aggregate_by} to aggregate by was not found in the second dataset."
@@ -493,21 +632,44 @@ class Preprocessing:
 
 
     def add_statistical_data(self, df):
+        """Add rolled averages, standard deviations, minimum and maximum values.
+        
+        Parameters:
+            - df: data set as a pandas.DataFrame object.
+        Returns:
+            - df: data set as a pandas.DataFrame object.
+        """
         # add the rolling mean/std/min/max of the last 48 data points (each data point represents a 30min period) as a feature
-
         for feature in ["temp", "wind_speed", "wind_speed_100", "wind_direction", "wind_direction_100", "solar_down_rad", "cloud_cover", "total_prec"]:
             if feature in df.columns:
-                df[f"{feature}_mean"] = df[f"{feature}"].rolling(48).mean()
-                df[f"{feature}_std"] = df[f"{feature}"].rolling(48).std()
-                df[f"{feature}_min"] = df[f"{feature}"].rolling(48).min()
-                df[f"{feature}_max"] = df[f"{feature}"].rolling(48).max()
+
+                df[f"{feature}_mean_24h"] = df[f"{feature}"].rolling(48).mean()
+                df[f"{feature}_std_24h"] = df[f"{feature}"].rolling(48).std()
+                df[f"{feature}_min_24h"] = df[f"{feature}"].rolling(48).min()
+                df[f"{feature}_max_24h"] = df[f"{feature}"].rolling(48).max()
+
+                df[f"{feature}_mean_12h"] = df[f"{feature}"].rolling(24).mean()
+                df[f"{feature}_std_12h"] = df[f"{feature}"].rolling(24).std()
+                df[f"{feature}_min_12h"] = df[f"{feature}"].rolling(24).min()
+                df[f"{feature}_max_12h"] = df[f"{feature}"].rolling(24).max()
+
+                df[f"{feature}_mean_6h"] = df[f"{feature}"].rolling(12).mean()
+                df[f"{feature}_std_6h"] = df[f"{feature}"].rolling(12).std()
+                df[f"{feature}_min_6h"] = df[f"{feature}"].rolling(12).min()
+                df[f"{feature}_max_6h"] = df[f"{feature}"].rolling(12).max()
 
         df = df.sort_values("val_time")
-
         return df
 
 
     def add_other_features(self, df):
+        """Extract further features from the data.
+        
+        Parameters:
+            - df: data set as a pandas.DataFrame object.
+        Returns:
+            - df: data set as a pandas.DataFrame object.
+        """
 
         if "wind_speed" in df.columns:
             # convert wind speed from m/s to km/h
@@ -538,7 +700,7 @@ class Preprocessing:
         if "temp" in df.columns:
             df["temp_range"] = df["temp_max"] - df["temp_min"]
 
-
+        # add the cyclic encoded features to the dataset.
         for col in ["month", "day", "dayofweek", "hour"]:
             time_col_sin = "sin_" + col
             time_col_cos = "cos_" + col
@@ -550,38 +712,63 @@ class Preprocessing:
     
 
     def convert_wind_directions_to_sin(self, data):
+        """Convert a degree (°) value into a radiant sine value.
+        
+        Parameters:
+            - data: input data.
+        Returns:
+            - data: output data.
+        
+        """
         data = np.deg2rad(data)
         return math.sin(data)
 
 
     def convert_wind_directions_to_cos(self, data):
+        """Convert a degree (°) value into a radiant cosine value.
+        
+        Parameters:
+            - data: input data.
+        Returns:
+            - data: output data.
+        
+        """
         data = np.deg2rad(data)
         return math.cos(data)
         
 
-    def merge_geo_energy_outage_data(self, geo_data, energy_outage_data, left_merge:str = "val_time", right_merge:str = "dtm"):
-        """Combine the geo data from the weather stations with the energy and outage data (CSV and JSON files combined)."""
+    def merge_geo_energy_outage_data(self, geo_data, energy_data, left_merge:str = "val_time", right_merge:str = "dtm"):
+        """Combine the geo data, which is combined with the REMIT data already, with the energy data.
+        
+        Parameters:
+            - geo_data: combined weather and REMIT data.
+            - energy_data: energy data.
+            - left_merge: column on the weather data to perform the merge.
+            - right_merge: column on the energy data to perform the merge.
+        Returns:
+            - merged_data: combined data.
+        """
 
         geo_data = geo_data.reset_index()
 
         assert left_merge in geo_data.columns, f"{left_merge} not found in geo data."
-        assert right_merge in energy_outage_data.columns, f"{right_merge} not found in energy and outage data."
+        assert right_merge in energy_data.columns, f"{right_merge} not found in energy and outage data."
 
         if "index" in geo_data.columns:
             geo_data.drop(columns = ["index"], axis = 1, inplace = True)
 
         assert type(geo_data) == type(pd.DataFrame()), "Geo data is not a pandas dataframe object."
-        assert type(energy_outage_data) == type(pd.DataFrame()), "Data with energy and outages is not a pandas dataframe object."
+        assert type(energy_data) == type(pd.DataFrame()), "Data with energy and outages is not a pandas dataframe object."
         assert geo_data.shape[0] > 0, "Geo data is empty."
-        assert energy_outage_data.shape[0] > 0, "Energy and outage data is empty."
+        assert energy_data.shape[0] > 0, "Energy and outage data is empty."
         assert "datetime" in str(geo_data[left_merge].dtype), f"First input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime."
-        assert "datetime" in str(energy_outage_data[right_merge].dtype), f"Second input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime."
+        assert "datetime" in str(energy_data[right_merge].dtype), f"Second input's dimension to aggregate by ({right_merge}) is not properly formatted to datetime."
 
-        merged_data = geo_data.merge(energy_outage_data, left_on = left_merge, right_on = right_merge, how = "right")
+        merged_data = geo_data.merge(energy_data, left_on = left_merge, right_on = right_merge, how = "right")
 
         for col in self.non_numerical_columns[:]:
             # check for valid input
-            if (col not in geo_data.columns) & (col not in energy_outage_data.columns):
+            if (col not in geo_data.columns) & (col not in energy_data.columns):
                 self.non_numerical_columns.remove(col)
         # perform this only if the data contains non-numerical columns
         if len(self.non_numerical_columns) > 0:
@@ -606,7 +793,13 @@ class Preprocessing:
     
 
     def add_difference_features(self, data):
-        """Add features based on the difference of values between data points."""
+        """Add features based on the difference of values between data points.
+        
+        Parameters:
+            - data: input data.
+        Returns:
+            - data: output data.
+        """
 
         for col in ['rel_hum', 'temp', 'total_precipitation',
                     'wind_direction', 'wind_speed', "wind_speed_100",
@@ -624,7 +817,14 @@ class Preprocessing:
     
 
     def add_fft_features(self, data, columns_to_fft:list = ["temp_diff", "solar_down_rad_diff", "wind_speed_diff", "wind_speed_100_diff"]):
-        """Perform a Fast Fourier Transformation (FFT) on selected features (defined in columns_to_fft). Apply a FFT for each unique date in the dataset (one FFT per day)."""
+        """Perform a Fast Fourier Transformation (FFT) on selected features (defined in columns_to_fft). Apply a FFT for each unique date in the dataset (one FFT per day).
+        
+        Parameters:
+            - data: input data.
+            - columns_to_fft: columns to compute the FFT on.
+        Returns:
+            - data: output data.
+        """
         for column in columns_to_fft:
             print(f"Apply FFT on {column}...")
             if column in data.columns:
