@@ -24,13 +24,14 @@ class FileExtractor:
         json_data = None
 
         for file in os.listdir(path):
-            with open(path + "/" + file) as f:
-                d = json.load(f)
-                d = pd.json_normalize(d)
-            if type(json_data) == type(None):
-                json_data = d
-            else:
-                json_data = pd.concat([json_data, d])
+            if file.split(".")[-1] == "json":
+                with open(path + "/" + file) as f:
+                    d = json.load(f)
+                    d = pd.json_normalize(d)
+                    if type(json_data) == type(None):
+                        json_data = d
+                    else:
+                        json_data = pd.concat([json_data, d])
 
         return json_data
     
@@ -100,8 +101,13 @@ class Preprocessing:
         extractor = FileExtractor()
         self.non_numerical_columns = non_numerical_columns
 
-        for file_name_pattern, file_path in geo_data_dict.items():
-            weather_data.append(extractor.combine_files(file_path, file_name_pattern, ".nc"))
+        if deployment == False:
+            for file_name_pattern, file_path in geo_data_dict.items():
+                weather_data.append(extractor.combine_files(file_path, file_name_pattern, ".nc"))
+        else:
+            #geo_data_dict = {"dwd": DataFrame, "ncep": DataFrame}
+            weather_data.append(geo_data_dict["dwd"])
+            weather_data.append(geo_data_dict["ncep"])
 
         print("Perform data cleaning on the weather data...")
         for index in range(0, len(weather_data)):
