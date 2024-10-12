@@ -10,6 +10,7 @@ from math import sin, cos, pi
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, MinMaxScaler, RobustScaler
 from sklearn.model_selection import train_test_split, TimeSeriesSplit
 import logging, sys
+from datetime import timedelta
 
 logging.getLogger().setLevel(logging.INFO)
 pd.set_option('future.no_silent_downcasting', True)
@@ -250,8 +251,8 @@ class Preprocessing:
                 return self.cyclic_sin(month / 12)
             elif time_information.lower() == "day":
                 return self.cyclic_sin(day / days_in_month[month])
-            elif time_information.lower() == "dayofweek":
-                return self.cyclic_sin(d.weekday() / 7)
+            # elif time_information.lower() == "dayofweek":
+            #     return self.cyclic_sin(d.weekday() / 7)
             elif time_information.lower() == "hour":
                 return self.cyclic_sin(d.hour / 60)
             elif time_information.lower() == "minute":
@@ -660,26 +661,25 @@ class Preprocessing:
         Returns:
             - df: data set as a pandas.DataFrame object.
         """
-        # add the rolling mean/std/min/max of the last 48 data points (each data point represents a 30min period) as a feature
+
+        # add the rolling mean/std/min/max of the last data points (each data point represents a 30min period) as features
         for feature in ["temp", "wind_speed", "wind_speed_100", "wind_direction", "wind_direction_100", "solar_down_rad", "cloud_cover", "total_prec"]:
             if feature in df.columns:
-
-                df[f"{feature}_mean_24h"] = df[f"{feature}"].rolling(48).mean()
-                df[f"{feature}_std_24h"] = df[f"{feature}"].rolling(48).std()
-                df[f"{feature}_min_24h"] = df[f"{feature}"].rolling(48).min()
-                df[f"{feature}_max_24h"] = df[f"{feature}"].rolling(48).max()
-
-                df[f"{feature}_mean_12h"] = df[f"{feature}"].rolling(24).mean()
-                df[f"{feature}_std_12h"] = df[f"{feature}"].rolling(24).std()
-                df[f"{feature}_min_12h"] = df[f"{feature}"].rolling(24).min()
-                df[f"{feature}_max_12h"] = df[f"{feature}"].rolling(24).max()
 
                 df[f"{feature}_mean_6h"] = df[f"{feature}"].rolling(12).mean()
                 df[f"{feature}_std_6h"] = df[f"{feature}"].rolling(12).std()
                 df[f"{feature}_min_6h"] = df[f"{feature}"].rolling(12).min()
                 df[f"{feature}_max_6h"] = df[f"{feature}"].rolling(12).max()
 
+                df[f"{feature}_mean_3h"] = df[f"{feature}"].rolling(6).mean()
+                df[f"{feature}_std_3h"] = df[f"{feature}"].rolling(6).std()
+                df[f"{feature}_min_3h"] = df[f"{feature}"].rolling(6).min()
+                df[f"{feature}_max_3h"] = df[f"{feature}"].rolling(6).max()
+
+                df[f"{feature}_next_forecast"] = df[f"{feature}"].shift(-1)
+
         df = df.sort_values("val_time")
+
         return df
 
 
@@ -695,12 +695,12 @@ class Preprocessing:
         if "wind_speed" in df.columns:
             # convert wind speed from m/s to km/h
             df["wind_speed"] = df["wind_speed"] * 3.6
-            df["wind_speed_range_24h"] = df["wind_speed_max_24h"] - df["wind_speed_min_24h"]
+            df["wind_speed_range_3h"] = df["wind_speed_max_3h"] - df["wind_speed_min_3h"]
 
         if "wind_speed_100" in df.columns:
             # convert wind speed from m/s to km/h
             df["wind_speed_100"] = df["wind_speed_100"] * 3.6
-            df["wind_speed_100_range_24h"] = df["wind_speed_100_max_24h"] - df["wind_speed_100_min_24h"]
+            df["wind_speed_100_range_3h"] = df["wind_speed_100_max_3h"] - df["wind_speed_100_min_3h"]
             # add the altitude difference in wind speed
             df["wind_speed_altitude_diff"] = df["wind_speed_100"] - df["wind_speed"]
 
@@ -715,11 +715,11 @@ class Preprocessing:
             df.drop(columns = ["wind_dir_100"], axis = 1, inplace = True)
 
         if "solar_down_rad" in df.columns:
-            df["solar_down_rad_range_24h"] = df["solar_down_rad_max_24h"] - df["solar_down_rad_min_24h"]
+            df["solar_down_rad_range_3h"] = df["solar_down_rad_max_3h"] - df["solar_down_rad_min_3h"]
             df["interaction_solar_down_rad_temp"] = df["solar_down_rad"] * df["temp"]
 
         if "temp" in df.columns:
-            df["temp_range_24h"] = df["temp_max_24h"] - df["temp_min_24h"]
+            df["temp_range_3h"] = df["temp_max_3h"] - df["temp_min_3h"]
 
         # add the cyclic encoded features to the dataset.
         for col in ["month", "day", "dayofweek", "hour"]:
@@ -912,7 +912,9 @@ class FeatureEngineerer:
             else:
                 self.scaler = RobustScaler()
 
-            self.train_val_test_split(data)
+            #self.train_val_test_split(data)
+
+            self.train_val_test_split_by_year(data)
 
         if len(self.columns_to_ohe) > 0:
             self.onehotencode(data, deployment = deployment)
@@ -939,6 +941,32 @@ class FeatureEngineerer:
         for train_index, val_index in ts.split(X_train_val):
             self.X_train, self.X_val = X_train_val.iloc[train_index, :], X_train_val.iloc[val_index, :]
             self.y_train, self.y_val = y_train_val.iloc[train_index], y_train_val.iloc[val_index]
+
+
+
+    def train_val_test_split_by_year(self, data, test_duration=12, val_duration=12):
+        """Perform a train-val-test split by the timespan of a year."""
+
+        data = data.sort_index()
+        max_date = data.index.max()
+        test_start_date = max_date - timedelta(weeks=52*test_duration/12)
+        test_end_date = test_start_date + timedelta(weeks=26)
+        val_end_date = test_start_date - timedelta(days=1)
+        val_start_date = val_end_date - timedelta(weeks=52*val_duration/12)
+
+        train_data = data[data.index < val_start_date]
+        val_data = data[(data.index >= val_start_date) & (data.index <= val_end_date)]
+        test_data = data[(data.index >= test_start_date) & (data.index <= test_end_date)]
+        
+        # Entferne die Spalten, die nicht benötigt werden
+        self.X_train = train_data.drop(self.labels_to_remove, axis=1)
+        self.y_train = train_data[self.label]
+
+        self.X_val = val_data.drop(self.labels_to_remove, axis=1)
+        self.y_val = val_data[self.label]
+
+        self.X_test = test_data.drop(self.labels_to_remove, axis=1)
+        self.y_test = test_data[self.label]
 
 
     def onehotencode(self, data, deployment:bool = False):
