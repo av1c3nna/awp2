@@ -301,7 +301,7 @@ class LGBMRegressorModel(BaseModel):
                 )
 
                 # Save the model
-                model_filename = os.path.join(self.model_save_dir, f"qr_model_quantile_{quantile}.pkl")
+                model_filename = os.path.join(self.model_save_dir, f"lgbm_model_quantile_{quantile}.pkl")
                 joblib.dump(qr_lgbm, model_filename)
                 print(f"Saved Quantile Regressor model for quantile {quantile} to {model_filename}")
 

@@ -850,7 +850,7 @@ class Preprocessing:
         return data
     
 
-    def add_fft_features(self, data, columns_to_fft:list = ["temp_diff", "solar_down_rad_diff", "wind_speed_diff", "wind_speed_100_diff"]):
+    def add_fft_features(self, data, columns_to_fft:list = list()):
         """Perform a Fast Fourier Transformation (FFT) on selected features (defined in columns_to_fft). Apply a FFT for each unique date in the dataset (one FFT per day).
         
         Parameters:
@@ -873,7 +873,7 @@ class FeatureEngineerer:
     """Performs the feature engineering steps such as train-val-test-splits, onehotencoding non-numerical columns and scaling the data. """
     
     def __init__(self, label:str = "Solar_MWh_credit", labels_to_remove:list = ["Solar_MWh_credit", "Wind_MWh_credit"], 
-                 columns_to_ohe:str = ['unavailabilityType', 'affectedUnit', 'outage'], train_ratio:float = 0.7, val_ratio:float = 0.2, test_ratio:float = 0.1, scaler_name:str = "standard"):
+                 columns_to_ohe:str = list(), train_ratio:float = 0.7, val_ratio:float = 0.2, test_ratio:float = 0.1, scaler_name:str = "standard"):
         assert train_ratio + val_ratio + test_ratio <= 1, "Train, validation and test data ratio can only equal to 1 as a sum."
 
         self.label = label
