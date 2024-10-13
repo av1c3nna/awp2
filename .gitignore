@@ -11,3 +11,8 @@ zeug.txt
 *.csv
 *.nc
 *.pyc
+*.pkl
+*.pyc
+*.drawio
+*.r
+*.bkp
