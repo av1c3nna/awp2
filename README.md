@@ -3,8 +3,9 @@ University project based on the Hybrid Energy Forecasting and Trading Competitio
 
 Preprocessing for wind data
 
-![Preprocessing_Flowchart_Wind drawio](https://github.com/user-attachments/assets/e9f6e70c-e6c6-4b7e-9127-265a53470363)
+![Preprocessing_Flowchart_Wind drawio](https://github.com/user-attachments/assets/8667e8f2-89b5-4be3-8bf3-ee4c30483940)
+
 
 Preprocessing for solar data
 
-![Preprocessing_Flowchart_Solar drawio](https://github.com/user-attachments/assets/b262601e-2429-4e66-8a27-6a76bb7671e7)
+![Preprocessing_Flowchart_Solar drawio](https://github.com/user-attachments/assets/65c6193f-4511-478b-b075-8ed434ac1e5d)
