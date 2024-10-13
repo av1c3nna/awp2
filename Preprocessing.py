@@ -980,8 +980,13 @@ class FeatureEngineerer:
         """
         
         try:
-            self.columns_to_ohe = list(data.dtypes[data.dtypes == "object"].index)
-        except:
+            true_ohe_columns = list(data.dtypes[data.dtypes == "object"].index)
+            for col in true_ohe_columns:
+                if col not in self.columns_to_ohe:
+                    logging.warning(f"Column {col} was recognized as a numerical feature. Will be converted and ignored for onehotencoding.")
+                    data[col] = pd.to_numeric(data[col])     
+        except Exception as e:
+            logging.warning(e)
             self.columns_to_ohe = []
         
         if len(self.columns_to_ohe) > 0:
@@ -989,19 +994,23 @@ class FeatureEngineerer:
                 self.ohe = OneHotEncoder(sparse_output = False, handle_unknown = "infrequent_if_exist")
                 self.X_train[self.ohe.get_feature_names_out()] = self.ohe.fit_transform(self.X_train[self.columns_to_ohe])
                 self.X_train.drop(columns = self.columns_to_ohe, axis = 1, inplace = True)
+                self.X_train = self.X_train.reindex(sorted(self.X_train.columns), axis=1)
 
                 # store the adjusted feature names after fitting the onehotencoder
                 self.features_after_fe = [*data.drop(columns = [*self.labels_to_remove, *self.columns_to_ohe], axis = 1).columns, *self.ohe.get_feature_names_out()]
 
                 self.X_val[self.ohe.get_feature_names_out()] = self.ohe.transform(self.X_val[self.columns_to_ohe])
                 self.X_val.drop(columns = self.columns_to_ohe, axis = 1, inplace = True)
+                self.X_val = self.X_val.reindex(sorted(self.X_val.columns), axis=1)
 
                 self.X_test[self.ohe.get_feature_names_out()] = self.ohe.transform(self.X_test[self.columns_to_ohe])
                 self.X_test.drop(columns = self.columns_to_ohe, axis = 1, inplace = True)
+                self.X_test = self.X_test.reindex(sorted(self.X_test.columns), axis=1)
             else:
-                data[self.ohe.get_feature_names_out()] = self.ohe.transform(data[self.columns_to_ohe])
-                data.drop(columns = self.columns_to_ohe, axis = 1, inplace = True)
-                self.deployment_data = data
+                self.deployment_data = data.copy()
+                self.deployment_data[self.ohe.get_feature_names_out()] = self.ohe.transform(self.deployment_data[self.columns_to_ohe])
+                self.deployment_data.drop(columns = self.columns_to_ohe, axis = 1, inplace = True)
+                self.deployment_data = self.deployment_data.reindex(sorted(self.deployment_data.columns), axis=1)
         else:
             logging.info("No features found to onehotencode.")
             return data
