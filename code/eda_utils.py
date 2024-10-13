@@ -1,7 +1,18 @@
 import matplotlib.pyplot as plt
+import seaborn as sns
 import pandas as pd
 import xarray as xr
 import plotly.express as px
+import matplotlib.pyplot as plt
+import pandas as pd
+from windrose import WindroseAxes, plot_windrose
+import matplotlib.pyplot as plt
+import matplotlib.colors as colors
+import numpy as np
+import matplotlib.ticker as mtick
+import argparse
+import math
+from matplotlib import cm
 
 
 def convert_xr_to_df(xr):
@@ -32,8 +43,8 @@ def groupby_time(df):
     return df.drop(["latitude", "longitude", "point"], axis=1, errors="ignore")
 
 def groupby_coordinates(df):
-    df = df.groupby(["latitude", "longitude"], as_index=False).agg(['mean', 'std'])
-    df = df.drop(["reference_time", "valid_time", "point"], axis=1, errors="ignore")
+    df = df.groupby(["latitude", "longitude", "valid_time"], as_index=False).agg(['mean', 'std'])
+    df = df.drop(["reference_time", "point"], axis=1, errors="ignore")
     #df.columns = ['_'.join(col).strip() for col in df.columns.values]
     
 
@@ -360,3 +371,140 @@ def show_errorbar(plot):
     
     # Show the plot
     plt.show()
+
+
+def energy_vs_feature(plot, energy, color):
+    
+
+    fig, axes = plt.subplots(nrows=len(plot.columns)-1, ncols=1, figsize=(20, 10))
+
+    # Flatten the axes array (makes it easier to iterate over)
+    axes = axes.flatten()
+    axes2 = [None] * len(plot.columns)
+    # Loop through each column and plot a histogram
+    for i, column in enumerate(plot.columns):
+        if column == energy:
+            break
+        else:
+
+            axes[i].plot(plot.index, plot[column], color, label=column)
+            axes[i].set_xlabel('Date')
+            axes[i].set_ylabel(column, color=color)
+            axes[i].tick_params(axis='y', labelcolor=color)
+
+            axes2[i] = axes[i].twinx()
+            axes2[i].plot(plot.index, plot[energy], 'orange', label=energy, alpha=0.7)
+            axes2[i].set_ylabel(energy, color='orange')
+            axes2[i].tick_params(axis='y', labelcolor='orange')
+            
+
+            # x-Achse für beide Plots als Datumsformat setzen
+            axes[i].xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%Y-%m-%d'))
+            axes[i].grid(True)
+            axes[i].set_title(f'{column} vs {energy} with Time Axis')
+
+            # Legenden erstellen
+            axes[i].legend(loc='upper left')
+            axes2[i].legend(loc='upper right')
+        # Rotieren der x-Achse Labels für bessere Lesbarkeit
+        # axes[i].xticks(rotation=45)
+    
+    # Adjust layout
+    plt.tight_layout()
+    
+    # Show the plot
+    plt.show()
+
+def energy_vs_feature_hourly(plot, energy, color):
+    
+    plot["hour"] = plot.index.hour
+
+    plot = plot.groupby("hour").mean()
+    fig, axes = plt.subplots(nrows=len(plot.columns)-1, ncols=1, figsize=(20, 10))
+
+    # Flatten the axes array (makes it easier to iterate over)
+    axes = axes.flatten()
+    axes2 = [None] * len(plot.columns)
+    # Loop through each column and plot a histogram
+    for i, column in enumerate(plot.columns):
+        if column == energy:
+            break
+        else:
+
+            axes[i].plot(plot.index, plot[column], color, label=column)
+            axes[i].set_xlabel('hour')
+            axes[i].set_ylabel(column, color=color)
+            axes[i].tick_params(axis='y', labelcolor=color)
+
+            axes2[i] = axes[i].twinx()
+            axes2[i].plot(plot.index, plot[energy], 'orange', label=energy, alpha=0.7)
+            axes2[i].set_ylabel(energy, color='orange')
+            axes2[i].tick_params(axis='y', labelcolor='orange')
+            
+
+            # x-Achse für beide Plots als Datumsformat setzen
+            axes[i].grid(True)
+            axes[i].set_title(f'{column} vs {energy} daily')
+
+            # Legenden erstellen
+            axes[i].legend(loc='upper left')
+            axes2[i].legend(loc='upper right')
+        # Rotieren der x-Achse Labels für bessere Lesbarkeit
+        # axes[i].xticks(rotation=45)
+    
+    # Adjust layout
+    plt.tight_layout()
+    
+    # Show the plot
+    plt.show()
+
+def truncate_colormap(color, minval=0.0, maxval=1.0, n=100):
+    cmap = plt.colormaps.get_cmap(color)
+    new_cmap = colors.LinearSegmentedColormap.from_list(
+        'trunc({n},{a:.2f},{b:.2f})'.format(n=cmap.name, a=minval, b=maxval),
+        cmap(np.linspace(minval, maxval, n)))
+    return new_cmap
+
+def plot_wind_rose(df, title, ax=None):
+
+    cmap = cm.viridis
+    ws = df['WindSpeed:100']["mean"].to_numpy()
+    wd = df['WindDirection:100']["mean"].to_numpy()
+
+    std = np.nanstd(ws)
+    u = np.nanmean(ws)
+
+    width = 3
+
+    maxVal = round(u+4*std)
+    num = math.ceil((maxVal)/width)
+    maxVal = width*num
+    if maxVal > 24:
+        maxVal = 24
+
+    # Form bin ranges
+
+    windRange = np.arange(0, maxVal , width)
+
+    # windRange = np.array([0, 3, 6, 9, 12, 15])
+
+    # Magically rounds the triangles (triangles to pizza slices if you will)
+    plt.hist([0, 1])
+    plt.close()
+
+    
+    ax = WindroseAxes.from_ax()
+    
+    ax.contourf(wd, ws, bins = windRange, normed=True, linewidth=0.5, cmap=cmap)
+    ax.contour(wd, ws, bins = windRange, normed=True, linewidth=0.5, colors="black")
+
+    
+    ax.set_legend(title = 'Wind Speed (m/s)', loc='best')
+    ax.set_title(title, fontsize = 16)
+
+    # Format radius axis to percentages
+    fmt = '%.0f%%' 
+    yticks = mtick.FormatStrFormatter(fmt)
+    ax.yaxis.set_major_formatter(yticks)
+
+
