@@ -20,15 +20,17 @@ def pinball(y, q, alpha):
 def pinball_score(df, quantiles):
     score = list()
     for qu in quantiles:
-        # Berechne den Pinball Loss für jedes Quantil
+        # pinball loss for every quantile
         score.append(pinball(y=df["true"],
                              q=df[f"{qu}"],
                              alpha=qu/100).mean())
-    return sum(score)/len(score)  # Durchschnittlicher Pinball Score
+    return sum(score)/len(score)  # avg pinball score
 
 
 # Base Model Class
 class BaseModel:
+    """super class for pinball score and visualization"""
+
     def __init__(self, feature_engineerer, quantiles, model_save_dir, load_pretrained=False):
         self.feature_engineerer = feature_engineerer
         self.quantiles = quantiles
@@ -43,9 +45,13 @@ class BaseModel:
             os.makedirs(self.model_save_dir)
 
     def pinball(self, y, q, alpha):
+        """formula for pinball score"""
+
         return (y - q) * alpha * (y >= q) + (q - y) * (1 - alpha) * (y < q)
 
     def pinball_score(self):
+        """pinball score implemetation"""
+
         score = []
         df = pd.DataFrame(self.q_predictions)
         for qu in self.quantiles:
@@ -53,6 +59,7 @@ class BaseModel:
         return sum(score) / len(score)
 
     def plot_quantils(self, daterange, y, quantiles, year = 2023, month=8, day=False):
+        """visualization for prediction"""
 
         warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -62,10 +69,10 @@ class BaseModel:
         sns.set_style("whitegrid")
 
         
-        data = plot_df[(plot_df.date.dt.year == year) & (plot_df.date.dt.month == month)]  # Nur die Daten für den ersten Monat filtern
-        
+        data = plot_df[(plot_df.date.dt.year == year) & (plot_df.date.dt.month == month)]  # use data for specific year and month
+           
         if day:
-            data = plot_df[(plot_df.date.dt.year == year) & (plot_df.date.dt.month == month) & (plot_df.date.dt.day == day)]
+            data = plot_df[(plot_df.date.dt.year == year) & (plot_df.date.dt.month == month) & (plot_df.date.dt.day == day)] # use  data for specific year, month and day
         
         # 2. Filtere die entsprechenden Zeilen aus `y`
 
@@ -118,6 +125,8 @@ class XGBoostModel(BaseModel):
             self._load_model()
 
     def _load_model(self):
+        """load the pretrained model"""
+
         model_filename = os.path.join(self.model_save_dir, f"xgboost_model.json")
         if os.path.exists(model_filename):
             self.booster = xgb.Booster()
@@ -128,6 +137,8 @@ class XGBoostModel(BaseModel):
             print(f"No pretrained model found at {model_filename}, training a new model instead.")
 
     def train_xgboost_model(self, x_train, y_train, x_val, y_val, feature_name):
+        """fit xgboost model to data"""
+
         evals_result = {}
         Xy_train = xgb.QuantileDMatrix(x_train, y_train, feature_names=feature_name)
         Xy_val = xgb.QuantileDMatrix(x_val, y_val, ref=Xy_train, feature_names=feature_name)
@@ -144,6 +155,7 @@ class XGBoostModel(BaseModel):
         return booster
 
     def train_and_predict(self):
+        """Train the xgboost model or use the pretrained one."""
         if not self.load_pretrained or not self.models_loaded:
             # Train a new model if not loading pretrained
             self.booster = self.train_xgboost_model(
@@ -174,6 +186,8 @@ class XGBoostModel(BaseModel):
             self.q_predictions[str(quantile)] = scores[:, i]
 
     def predict(self, X_test):
+        """use trained or loaded model to predict"""
+
         if not self.models_loaded:
             raise ValueError("Model not loaded. You need to load or train the model first.")
         
@@ -190,7 +204,8 @@ class XGBoostModel(BaseModel):
         return predictions
     
     def plot_feature_importance(self):
-        
+        """plot feature importance"""
+
         self.importance_dict = self.booster.get_score(importance_type='weight')
         self.importance_df = pd.DataFrame(list(self.importance_dict.items()), columns=['Feature', 'Importance'])
         # self.importance_df = self.importance_df.sort_values(by='Importance')
@@ -206,6 +221,8 @@ class XGBoostModel(BaseModel):
 
 # Quantile Regressor Model Class
 class QuantileRegressorModel(BaseModel):
+    """basic quantile regression model"""
+
     def __init__(self, feature_engineerer, quantiles, model_save_dir, load_pretrained=False):
         super().__init__(feature_engineerer, quantiles, model_save_dir, load_pretrained)
         self.solver = "highs" if sp_version >= parse_version("1.6.0") else "interior-point"
@@ -266,6 +283,8 @@ class QuantileRegressorModel(BaseModel):
 
 
 class LGBMRegressorModel(BaseModel):
+    """lightgbm quantile regression"""
+    
     def __init__(self, feature_engineerer, quantiles, model_save_dir, load_pretrained=False):
         super().__init__(feature_engineerer, quantiles, model_save_dir, load_pretrained)
         self.models = {}
