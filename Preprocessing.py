@@ -471,6 +471,13 @@ class Preprocessing:
                         "CloudCover": "cloud_cover",
                         "SolarDownwardRadiation": "solar_down_rad"})
         
+        if "wind_speed" in df.columns:
+            # convert wind speed from m/s to km/h
+            df["wind_speed"] = df["wind_speed"] * 3.6
+        if "wind_speed_100" in df.columns:
+            # convert wind speed from m/s to km/h
+            df["wind_speed_100"] = df["wind_speed_100"] * 3.6
+        
         # convert the datetime information to the right format
 
         df["ref_time"] = pd.to_datetime(df["ref_time"])
@@ -693,13 +700,9 @@ class Preprocessing:
         """
 
         if "wind_speed" in df.columns:
-            # convert wind speed from m/s to km/h
-            df["wind_speed"] = df["wind_speed"] * 3.6
             df["wind_speed_range_3h"] = df["wind_speed_max_3h"] - df["wind_speed_min_3h"]
 
         if "wind_speed_100" in df.columns:
-            # convert wind speed from m/s to km/h
-            df["wind_speed_100"] = df["wind_speed_100"] * 3.6
             df["wind_speed_100_range_3h"] = df["wind_speed_100_max_3h"] - df["wind_speed_100_min_3h"]
             # add the altitude difference in wind speed
             df["wind_speed_altitude_diff"] = df["wind_speed_100"] - df["wind_speed"]
