@@ -8,7 +8,11 @@ import os
 
 
 class AutoSubmitter:
-
+    """
+    This class automates the process of fetching, preprocessing, and predicting energy production 
+    (both wind and solar) for the next day. It is executed once daily to generate the predictions 
+    and prepare them for submission to the Rebase API.
+    """
     def __init__(self, hornsea_model, pes_model):
         """
         Initializes the AutoSubmitter with models and API client.
