@@ -5,6 +5,14 @@ import xgboost as xgb
 from sklearn.linear_model import QuantileRegressor
 from sklearn.utils.fixes import parse_version, sp_version
 import joblib
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings 
+import lightgbm as lgb
+from lightgbm import early_stopping, log_evaluation
+import matplotlib.dates as mdates
+from datetime import datetime, date
+
 
 def pinball(y, q, alpha):
     return (y - q) * alpha * (y >= q) + (q - y) * (1 - alpha) * (y < q)
@@ -44,15 +52,55 @@ class BaseModel:
             score.append(self.pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean())
         return sum(score) / len(score)
 
-    def plot_intervalls(self, df):
-        pass
+    def plot_quantils(self, daterange, y, quantiles, year = 2023, month=8, day=False):
+
+        warnings.filterwarnings("ignore", category=FutureWarning)
+
+        y["date"] = daterange
+        plot_df = pd.DataFrame(y)
+
+        sns.set_style("whitegrid")
+
+        
+        data = plot_df[(plot_df.date.dt.year == year) & (plot_df.date.dt.month == month)]  # Nur die Daten für den ersten Monat filtern
+        
+        if day:
+            data = plot_df[(plot_df.date.dt.year == year) & (plot_df.date.dt.month == month) & (plot_df.date.dt.day == day)]
+        
+        # 2. Filtere die entsprechenden Zeilen aus `y`
+
+        plt.figure(figsize=(10,6))
+        sns.lineplot( x=data.date, y=data["true"], label="True")
+
+        for quantile in quantiles:
+            sns.lineplot(
+                        x=data.date,
+                        y=data[str(quantile)],
+                        color='gray',
+                        alpha=(1-abs(1-quantile)),
+                        label=f'q{quantile}')
+        if day:
+            plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H'))
+            date = datetime(year, month, day)
+            formatted_date = date.strftime("%d/%m/%Y")
+        else:
+            date = datetime(year, month, 1)
+            formatted_date = date.strftime("%B %Y")
+        
+        plt.title(f"Energy-Generation on {formatted_date}")
+        plt.xlabel('Date/Time')
+        plt.ylabel('Generation [MWh]')
+        plt.tight_layout()
 
 
 # XGBoost Model Class
 class XGBoostModel(BaseModel):
-    def __init__(self, feature_engineerer, quantiles, model_save_dir, hyperparams=False, load_pretrained=False):
+    def __init__(self, feature_engineerer, quantiles, model_save_dir, hyperparams=False, load_pretrained=False, num_boost_round=250, early_stopping_rounds=10):
         super().__init__(feature_engineerer, quantiles, model_save_dir, load_pretrained)
         
+        self.num_boost_round = num_boost_round
+        self.early_stopping_rounds = early_stopping_rounds
+
         if not hyperparams:
             self.hyperparams = {
             # Use the quantile objective function.
@@ -79,17 +127,17 @@ class XGBoostModel(BaseModel):
         else:
             print(f"No pretrained model found at {model_filename}, training a new model instead.")
 
-    def train_xgboost_model(self, x_train, y_train, x_val, y_val):
+    def train_xgboost_model(self, x_train, y_train, x_val, y_val, feature_name):
         evals_result = {}
-        Xy_train = xgb.QuantileDMatrix(x_train, y_train)
-        Xy_val = xgb.QuantileDMatrix(x_val, y_val, ref=Xy_train)
+        Xy_train = xgb.QuantileDMatrix(x_train, y_train, feature_names=feature_name)
+        Xy_val = xgb.QuantileDMatrix(x_val, y_val, ref=Xy_train, feature_names=feature_name)
 
         # Training XGBoost model
         booster = xgb.train(
             self.hyperparams,  
             Xy_train,
-            num_boost_round=50,
-            early_stopping_rounds=10,
+            num_boost_round=self.num_boost_round,
+            early_stopping_rounds=self.early_stopping_rounds,
             evals=[(Xy_train, "Train"), (Xy_val, "Val")],
             evals_result=evals_result,
         )
@@ -102,7 +150,8 @@ class XGBoostModel(BaseModel):
                 self.feature_engineerer.X_train,
                 self.feature_engineerer.y_train,
                 self.feature_engineerer.X_val,
-                self.feature_engineerer.y_val
+                self.feature_engineerer.y_val,
+                self.feature_engineerer.features_after_fe
             )
 
             # Save the model
@@ -139,6 +188,19 @@ class XGBoostModel(BaseModel):
             predictions[str(quantile)] = scores[:, i]
 
         return predictions
+    
+    def plot_feature_importance(self):
+        
+        self.importance_dict = self.booster.get_score(importance_type='weight')
+        self.importance_df = pd.DataFrame(list(self.importance_dict.items()), columns=['Feature', 'Importance'])
+        # self.importance_df = self.importance_df.sort_values(by='Importance')
+        plt.figure(figsize=(12, 8))  # Größe anpassen
+        plt.barh(self.importance_df['Feature'], self.importance_df['Importance'])
+        plt.xlabel('Feature Importance')
+        plt.ylabel('Features')
+        plt.grid(True)
+        plt.title('Manuelle Feature Importance Visualisierung')
+        plt.show()
 
 
 
@@ -200,3 +262,85 @@ class QuantileRegressorModel(BaseModel):
             predictions[str(quantile)] = self.models[quantile].predict(X_test)
         
         return predictions
+    
+
+
+class LGBMRegressorModel(BaseModel):
+    def __init__(self, feature_engineerer, quantiles, model_save_dir, load_pretrained=False):
+        super().__init__(feature_engineerer, quantiles, model_save_dir, load_pretrained)
+        self.models = {}
+
+        if self.load_pretrained:
+            self._load_models()
+
+    def _load_models(self):
+        """Load the pretrained models from disk."""
+        for quantile in self.quantiles:
+            model_filename = os.path.join(self.model_save_dir, f"lgbm_model_quantile_{quantile}.pkl")
+            if os.path.exists(model_filename):
+                self.models[quantile] = joblib.load(model_filename)
+                self.models_loaded = True  # Set models_loaded to True when models are loaded
+                print(f"Loaded pretrained Quantile Regressor model for quantile {quantile} from {model_filename}")
+            else:
+                print(f"No pretrained model found for quantile {quantile}. Training a new model instead.")
+
+    def train_and_predict(self):
+        """Train the LGBMRegressor models or use the pretrained ones."""
+        for quantile in self.quantiles:
+            if not self.load_pretrained or quantile not in self.models:
+                # Train a new model for this quantile
+                qr_lgbm = lgb.LGBMRegressor(objective='quantile', alpha=quantile, n_estimators=1000, force_col_wise=True)
+                qr_lgbm.fit(
+                    self.feature_engineerer.X_train, 
+                    self.feature_engineerer.y_train,
+                    eval_set=[(self.feature_engineerer.X_train, self.feature_engineerer.y_train), 
+                              (self.feature_engineerer.X_val, self.feature_engineerer.y_val)],
+                    eval_names=['train', 'valid'],
+                    eval_metric='quantile',
+                    callbacks=[early_stopping(stopping_rounds=50), log_evaluation(50)]
+                )
+
+                # Save the model
+                model_filename = os.path.join(self.model_save_dir, f"qr_model_quantile_{quantile}.pkl")
+                joblib.dump(qr_lgbm, model_filename)
+                print(f"Saved Quantile Regressor model for quantile {quantile} to {model_filename}")
+
+                # Store the model for prediction
+                self.models[quantile] = qr_lgbm
+            else:
+                print(f"Using the loaded pretrained Quantile Regressor model for quantile {quantile}")
+
+            # Predict and store the results
+            self.q_predictions[str(quantile)] = self.models[quantile].predict(self.feature_engineerer.X_test)
+
+        # **Set models_loaded to True after training so predict can be called immediately**
+        self.models_loaded = True
+
+    def predict(self, X_test):
+        """Use the trained or loaded models to make predictions."""
+        if not self.models_loaded:
+            raise ValueError("Models not loaded. You need to load or train the models first.")
+
+        predictions = {}
+        for quantile in self.quantiles:
+            if quantile not in self.models:
+                raise ValueError(f"Model for quantile {quantile} not available. Train or load the model first.")
+                
+            predictions[str(quantile)] = self.models[quantile].predict(X_test)
+            
+        return predictions
+    
+    def plot_feature_importance(self, feature_dataset):
+        self.importance_df = pd.DataFrame({
+            # 'Feature': qr_lgbm.feature_name_,
+            # 'Importance': qr_lgbm.feature_importances_
+        })
+        self.importance_df["feature_name"] = feature_dataset.drop(['Solar_MWh_credit', 'Wind_MWh_credit'], axis=1).columns
+        # Plotten der Feature Importance
+        plt.figure(figsize=(12, 8))  # Plot-Größe anpassen
+        plt.barh(self.importance_df['feature_name'], self.importance_df['Importance'])
+        plt.xlabel('Feature Importance')
+        plt.ylabel('Features')
+        plt.title('Manuelle Feature Importance Visualisierung Lightgbm')
+        plt.grid(True)
+        plt.show()
