@@ -16,6 +16,8 @@ from matplotlib import cm
 
 
 def convert_xr_to_df(xr):
+    """creates pandas dataframes"""
+
     if "ref_datetime" and "valid_datetime" in xr.dims:
 
         df = xr.to_dataframe().reset_index()
@@ -31,6 +33,7 @@ def convert_xr_to_df(xr):
     return df
 
 def concat_dfs(df_list):
+    """concat dfs"""
 
     df_base = df_list[0]
     for i in range (1, len(df_list)):
@@ -38,33 +41,36 @@ def concat_dfs(df_list):
     return df_base
 
 def groupby_time(df):
+    """time point of view"""
+
     df = df.groupby(["reference_time", "valid_time"], as_index=False).mean()
 
     return df.drop(["latitude", "longitude", "point"], axis=1, errors="ignore")
 
 def groupby_coordinates(df):
+    """geographic point of view"""
+
     df = df.groupby(["latitude", "longitude", "valid_time"], as_index=False).agg(['mean', 'std'])
     df = df.drop(["reference_time", "point"], axis=1, errors="ignore")
-    #df.columns = ['_'.join(col).strip() for col in df.columns.values]
     
 
-    return df#df.rename(columns={'latitude_': 'latitude', 'longitude_':'longitude'})
+    return df
 
 def combine_files(file_paths, agg=None):
+    """combines given filepaths to one dataframe"""
     dataframes = []
     
-    # Lade jede Datei, konvertiere sie in einen DataFrame und füge zur Liste hinzu
     for file_path in file_paths:
-        xr_dataset = xr.open_dataset(file_path)  # NetCDF-Datei laden
-        df = convert_xr_to_df(xr_dataset)       # Konvertieren in DataFrame
-        dataframes.append(df)                   # Hinzufügen zur Liste
+        xr_dataset = xr.open_dataset(file_path)  
+        df = convert_xr_to_df(xr_dataset)       
+        dataframes.append(df)                   
     
-    # DataFrames zusammenfügen
     df_full = concat_dfs(dataframes)
     
     if not agg:
         df_full_agg = df_full
-
+    
+    # choose aggregation method to reduce data 
     if agg == "time":
         df_full_agg = groupby_time(df_full)
 
@@ -75,12 +81,9 @@ def combine_files(file_paths, agg=None):
     return df_full_agg
 
 def show_histograms(plot):
-    # Initialize a 3x3 charts
-    # plot = df.iloc[:, 2:]
-
+    """creates histogram for every feature in df"""
     fig, axes = plt.subplots(nrows=1, ncols=len(plot.columns), figsize=(20, 6))
 
-    # Flatten the axes array (makes it easier to iterate over)
     axes = axes.flatten()
 
     # Loop through each column and plot a histogram
@@ -88,8 +91,8 @@ def show_histograms(plot):
         
         # Add the histogram
         plot[column].hist(ax=axes[i], # Define on which ax we're working on
-                        edgecolor='white', # Color of the border
-                        color='#69b3a2', # Color of the bins
+                        edgecolor='white', 
+                        color='#69b3a2', 
                     )
         
         # Add title and axis label
@@ -97,58 +100,49 @@ def show_histograms(plot):
         axes[i].set_xlabel(column) 
         axes[i].set_ylabel('Frequency') 
 
-    # Adjust layout
-    plt.tight_layout()
     
-    # Show the plot
+    plt.tight_layout()
     plt.show()
 
 
-def combine_histograms(dfs, names):
-    """
-    Funktion, die Histogramme der gleichen Spalten aus mehreren DataFrames auf dem gleichen Plot kombiniert.
-    :param dfs: Liste von DataFrames
-    """
-    # Wähle die Spalten, die verglichen werden sollen (in diesem Fall alle nach der zweiten Spalte)
-    # columns = dfs[0].columns[2:]
-    columns = dfs[0].columns
+def combine_histograms(dfs, names, figsize=(15, 4), title="Vergleich der Histogramme"):
+    """compares histograms of given dataframes"""
+    columns = dfs[0].columns[2:] #time columns skipped
 
-    # Erstelle die Subplots für jede Spalte
-    fig, axes = plt.subplots(nrows=1, ncols=len(columns), figsize=(20, 6))
+    # create subplot for every feature
+    fig, axes = plt.subplots(nrows=1, ncols=len(columns), figsize=figsize)
 
-    # Überprüfe, ob nur eine Spalte ausgewählt wurde
     if len(columns) == 1:
-        axes = [axes]  # Stelle sicher, dass es sich um eine Liste handelt
+        axes = [axes]  
 
-    # Für jede Spalte
+    # iterate over every feature
     for i, column in enumerate(columns):
-        # Zeichne jedes DataFrame auf derselben Achse
         for df, name, color in zip(dfs, names, ["blue", "orange"]):
-            df[column].hist(ax=axes[i],alpha=0.6, edgecolor='white', label=name, color=color)
+            df[column].hist(ax=axes[i],alpha=0.6, edgecolor='white', label=name, color=color, density=True)
 
-        # Beschriftungen und Titel hinzufügen
         axes[i].set_title(f'{column} distribution')
         axes[i].set_xlabel(column)
         axes[i].set_ylabel('Frequency')
         axes[i].legend()
 
-    # Layout anpassen und alle Plots anzeigen
+    plt.suptitle(title, fontweight="bold")
     plt.tight_layout()
     plt.show()
 
 def show_lineplot(plot, freq):
+    """lineplot weather data"""
+
     plot = plot.iloc[:, 1:]
     plot = plot.resample(freq, on='valid_time').mean().reset_index()
 
     fig, axes = plt.subplots(nrows=len(plot.columns)-1, ncols=1, figsize=(20, 20))
 
-    # Flatten the axes array (makes it easier to iterate over)
     axes = axes.flatten()
 
     # Loop through each column and plot a histogram
     for i, column in enumerate(plot.iloc[:, 1:].columns):
         
-        # Add the histogram
+        # Add the lineplot
         axes[i].plot(plot["valid_time"], plot[column], marker='o', color='#69b3a2')
         
         # Add title and axis label
@@ -157,25 +151,22 @@ def show_lineplot(plot, freq):
         axes[i].set_ylabel(column) 
         axes[i].grid(True)
 
-    # Adjust layout
     plt.tight_layout()
-    
-    # Show the plot
     plt.show()
 
 def show_lineplot_energy(plot, freq):
+    """lineplot energy_dataset"""
     # plot = plot.iloc[:, 1:]
     plot = plot.resample(freq, on='dtm').mean().reset_index()
 
     fig, axes = plt.subplots(nrows=len(plot.columns)-1, ncols=1, figsize=(20, 20))
 
-    # Flatten the axes array (makes it easier to iterate over)
     axes = axes.flatten()
 
-    # Loop through each column and plot a histogram
+    # Loop through each column and plot a lineplot
     for i, column in enumerate(plot.iloc[:, 1:].columns):
         
-        # Add the histogram
+        # Add the lineplot
         axes[i].plot(plot["dtm"], plot[column], marker='o', color='#69b3a2')
         
         # Add title and axis label
@@ -184,18 +175,13 @@ def show_lineplot_energy(plot, freq):
         axes[i].set_ylabel(column) 
         axes[i].grid(True)
 
-    # Adjust layout
     plt.tight_layout()
-    
-    # Show the plot
     plt.show()
 
 def compare_lineplots(plots, names, freq):
-
+    """compare lineplots weather data"""
 
     fig, axes = plt.subplots(nrows=len(plots[0].columns)-2, ncols=1, figsize=(20, 20))
-
-    # Flatten the axes array (makes it easier to iterate over)
     axes = axes.flatten()
 
     # Loop through each column and plot a histogram
@@ -203,7 +189,7 @@ def compare_lineplots(plots, names, freq):
 
         for plot, name, color in zip(plots, names, ["blue", "orange"]):
             plot = plot.iloc[:, 1:]
-            plot = plot.resample(freq, on='valid_time').mean().reset_index()
+            plot = plot.resample(freq, on='valid_time').mean().reset_index() # resamples on given frequency
             axes[i].plot(plot["valid_time"], plot[column], marker='o', label = name, color=color, alpha=0.5)
         
         # Add title and axis label
@@ -213,18 +199,14 @@ def compare_lineplots(plots, names, freq):
         axes[i].legend()
         axes[i].grid(True)
 
-    # Adjust layout
+
     plt.tight_layout()
-    
-    # Show the plot
     plt.show()
 
 def compare_lineplots_energy(plots, names, freq):
-
+    """lineplot for energy dataset"""
 
     fig, axes = plt.subplots(nrows=len(plots[0].columns)-1, ncols=1, figsize=(20, 20))
-
-    # Flatten the axes array (makes it easier to iterate over)
     axes = axes.flatten()
 
     # Loop through each column and plot a histogram
@@ -242,13 +224,11 @@ def compare_lineplots_energy(plots, names, freq):
         axes[i].legend()
         axes[i].grid(True)
 
-    # Adjust layout
     plt.tight_layout()
-    
-    # Show the plot
     plt.show()
 
 def show_scatter(df,name, color_variable=None):
+    """shows coordinates as scatter"""
 
     if not color_variable:
         scatter = plt.scatter(df['latitude'], df['longitude'],
@@ -260,11 +240,10 @@ def show_scatter(df,name, color_variable=None):
         scatter = plt.scatter(df['latitude'], df['longitude'], c=color_variable,
                         cmap='viridis', label=name, alpha=0.6)
 
-        # Farbskala (Colorbar) hinzufügen
         plt.colorbar(scatter, label=name)
 
-        # Titel und Achsenbeschriftungen hinzufügen
         plt.title(f'Scatterplot of Latitude vs Longitude with {color_variable.name} colored')
+
     plt.xlabel('Latitude')
     plt.ylabel('Longitude')
 
@@ -278,7 +257,7 @@ def show_scatter(df,name, color_variable=None):
     plt.show()
 
 def compare_scatter(dfs, names):
-    
+    """plots coordinates of multiple dfs"""
     plt.figure(figsize=(10,6))
 
     for df, name in zip(dfs, names):
@@ -288,13 +267,8 @@ def compare_scatter(dfs, names):
     plt.xlabel('Latitude')
     plt.ylabel('Longitude')
 
-    # Raster aktivieren
     plt.grid(True)
-
-    # Legende hinzufügen
     plt.legend()
-
-    # Plot anzeigen
     plt.show()
 
 def plot_stations_on_map(dfs, names):
@@ -306,21 +280,19 @@ def plot_stations_on_map(dfs, names):
     """
     fig = px.scatter_geo()
     
-    # Farben für die einzelnen DataFrames
-    colors = px.colors.qualitative.Plotly  # Plotly Standard-Farbpalette
+    colors = px.colors.qualitative.Plotly  
 
     for i, (df, name) in enumerate(zip(dfs, names)):
         fig.add_scattergeo(
             lat=df['latitude'],
             lon=df['longitude'],
-            mode='markers',  # Marker und Namen anzeigen
+            mode='markers',  
             marker=dict(color=colors[i % len(colors)], size=8),
             name=name  # Legendenname für den jeweiligen DataFrame
         )
 
     # Karteneinstellungen, um Großbritannien zu fokussieren
     fig.update_geos(
-        #projection_type="natural earth",  # Kartentyp
         showcountries=True, 
         scope='world',
         fitbounds = 'locations',
@@ -351,13 +323,10 @@ def show_errorbar(plot):
 
     fig, axes = plt.subplots(nrows=1, ncols=len(features), figsize=(20, 4))
 
-    # Flatten the axes array (makes it easier to iterate over)
     axes = axes.flatten()
-
-    # Loop through each column and plot a histogram
     for i, column in enumerate(features):
         
-        # Add the histogram
+        # Add the errorbar plot
         axes[i].errorbar(plot.index, plot[column]['mean'], yerr=plot[column]['std'], fmt='o', label=column, elinewidth=3, capsize=0)
         
         # Add title and axis label
@@ -366,19 +335,15 @@ def show_errorbar(plot):
         axes[i].set_ylabel(column) 
         axes[i].grid(True)
 
-    # Adjust layout
     plt.tight_layout()
-    
-    # Show the plot
     plt.show()
 
 
-def energy_vs_feature(plot, energy, color):
-    
+def energy_vs_feature(plot, energy, color, figsize=(20, 10)):
+    """compares energy production to weather feature over time"""
 
-    fig, axes = plt.subplots(nrows=len(plot.columns)-1, ncols=1, figsize=(20, 10))
+    fig, axes = plt.subplots(nrows=len(plot.columns)-1, ncols=1, figsize=figsize)
 
-    # Flatten the axes array (makes it easier to iterate over)
     axes = axes.flatten()
     axes2 = [None] * len(plot.columns)
     # Loop through each column and plot a histogram
@@ -398,31 +363,25 @@ def energy_vs_feature(plot, energy, color):
             axes2[i].tick_params(axis='y', labelcolor='orange')
             
 
-            # x-Achse für beide Plots als Datumsformat setzen
             axes[i].xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%Y-%m-%d'))
             axes[i].grid(True)
-            axes[i].set_title(f'{column} vs {energy} with Time Axis')
+            axes[i].set_title(f'{column} vs {energy} mit Zeitachse', fontweight="bold")
 
-            # Legenden erstellen
+            
             axes[i].legend(loc='upper left')
             axes2[i].legend(loc='upper right')
-        # Rotieren der x-Achse Labels für bessere Lesbarkeit
-        # axes[i].xticks(rotation=45)
-    
-    # Adjust layout
+
     plt.tight_layout()
-    
-    # Show the plot
     plt.show()
 
 def energy_vs_feature_hourly(plot, energy, color):
-    
+    """compares energy production to weather feature over hourly"""
     plot["hour"] = plot.index.hour
 
     plot = plot.groupby("hour").mean()
     fig, axes = plt.subplots(nrows=len(plot.columns)-1, ncols=1, figsize=(20, 10))
 
-    # Flatten the axes array (makes it easier to iterate over)
+    
     axes = axes.flatten()
     axes2 = [None] * len(plot.columns)
     # Loop through each column and plot a histogram
@@ -442,20 +401,15 @@ def energy_vs_feature_hourly(plot, energy, color):
             axes2[i].tick_params(axis='y', labelcolor='orange')
             
 
-            # x-Achse für beide Plots als Datumsformat setzen
+            
             axes[i].grid(True)
             axes[i].set_title(f'{column} vs {energy} daily')
 
-            # Legenden erstellen
+            
             axes[i].legend(loc='upper left')
             axes2[i].legend(loc='upper right')
-        # Rotieren der x-Achse Labels für bessere Lesbarkeit
-        # axes[i].xticks(rotation=45)
     
-    # Adjust layout
     plt.tight_layout()
-    
-    # Show the plot
     plt.show()
 
 def truncate_colormap(color, minval=0.0, maxval=1.0, n=100):
@@ -493,14 +447,14 @@ def plot_wind_rose(df, title, ax=None):
     plt.close()
 
     
-    ax = WindroseAxes.from_ax()
+    ax = WindroseAxes.from_ax(figsize=(7,7))
     
     ax.contourf(wd, ws, bins = windRange, normed=True, linewidth=0.5, cmap=cmap)
     ax.contour(wd, ws, bins = windRange, normed=True, linewidth=0.5, colors="black")
 
     
     ax.set_legend(title = 'Wind Speed (m/s)', loc='best')
-    ax.set_title(title, fontsize = 16)
+    ax.set_title(title, fontweight="bold")
 
     # Format radius axis to percentages
     fmt = '%.0f%%' 
