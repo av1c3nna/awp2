@@ -978,11 +978,11 @@ class FeatureEngineerer:
         Returns:
             - data: output data, if no columns are found to be onehotencoded. Otherwise None.
         """
-        # check for valid input for columns to onehotencode
-        if len(self.columns_to_ohe) > 0:
-            for column in self.columns_to_ohe[:]:
-                if column not in data.columns:
-                    self.columns_to_ohe.remove(column)
+        
+        try:
+            self.columns_to_ohe = list(data.dtypes[data.dtypes == "object"].index)
+        except:
+            self.columns_to_ohe = []
         
         if len(self.columns_to_ohe) > 0:
             if deployment == False:
