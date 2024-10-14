@@ -112,11 +112,16 @@ class AutoSubmitter:
                 return self._saved_state
 
         df_fetched = comp_utils.weather_df_to_xr(df_fetched).to_dataframe()
-        # Check if the dataframe contains all relevant timestamps
+        # Check if the dataframe contains all relevant timestamps for the market period of the next day
         if len(df_fetched[(df_fetched.index.get_level_values("valid_datetime") >= start_time) & 
                           (df_fetched.index.get_level_values("valid_datetime") <= end_time)]
                           .groupby("valid_datetime")) < 25:
-            logger.warning("Fetched weather data does not appear to contain all relevant timestamps. Model predictions could be incomplete.")
+            logger.warning("Fetched weather data does not appear to contain all relevant timestamps of the market period. Model predictions might be incomplete.")
+        
+        # Check if the dataframe contains enough timestamps to compute 6-hour interval rolling features
+        if len(df_fetched[(df_fetched.index.get_level_values("valid_datetime") <= start_time)]
+                          .groupby("valid_datetime")) < 6:
+            logger.warning("Fetched weather data does not appear to contain all relevant timestamps to compute 6-hour rolling interval features. Model predictions might be inaccurate.")
 
         return df_fetched
     
