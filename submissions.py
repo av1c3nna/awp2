@@ -264,36 +264,43 @@ class AutoSubmitter:
         Prepares the submission data in the required format.
         """
         logger.info("Preparing data for submission...")
+        self._saved_state = copy.deepcopy(self)
 
-        # Create a pandas with the right market times of the next day as index
-        submission_data = pd.DataFrame({"datetime":comp_utils.day_ahead_market_times()})
-        # Create a dictionary of the summed predictions of the two models (Hornsea 1 and PES)
-        pred = dict()
-        for keys in [("q10","0.1"), ("q20","0.2"), ("q30","0.3"), ("q40","0.4"), ("q50","0.5"), ("q60","0.6"), ("q70","0.7"), ("q80","0.8"), ("q90","0.9")]:
-                pred[keys[0]] = self.predictions["hornsea"][keys[1]] + self.predictions["pes"][keys[1]]
+        try:
+            # Create a pandas with the right market times of the next day as index
+            submission_data = pd.DataFrame({"datetime":comp_utils.day_ahead_market_times()})
+            # Create a dictionary of the summed predictions of the two models (Hornsea 1 and PES)
+            pred = dict()
+            for keys in [("q10","0.1"), ("q20","0.2"), ("q30","0.3"), ("q40","0.4"), ("q50","0.5"), ("q60","0.6"), ("q70","0.7"), ("q80","0.8"), ("q90","0.9")]:
+                    pred[keys[0]] = self.predictions["hornsea"][keys[1]] + self.predictions["pes"][keys[1]]
 
-        # Merge the prediction dictionary with the dataframe on the right market times of the next day.
-        index = self.hornsea_data["df_preprocessed"].index
-        submission_data = pd.DataFrame(pred, index=index).merge(submission_data, how="right", left_on="val_time", right_on="datetime")
-        # Set the predictions for the market bid
-        submission_data["market_bid"] = submission_data["q50"]
-        # Check if submission data has the right shape
-        print(submission_data.shape)
-        if submission_data.shape != (48, 11):
-            logger.warning("There are less predictions values than there should be. Something seems to have gone wrong.")
-        # Check if submission data contains any NaN values
-        if submission_data.isna().any().any():
-            logger.warning("Predictions contain NaN values. Something seems to have gone wrong.")
-        # Check if submission data contains any negative values
-        if (submission_data.drop("datetime", axis=1) < 0).any().any():
-            logger.warning("Predictions contain negative values. Something seems to have gone wrong.")
-        logger.info("Successfully created dataframe of submission data.")
-
+            # Merge the prediction dictionary with the dataframe on the right market times of the next day.
+            index = self.hornsea_data["df_preprocessed"].index
+            submission_data = pd.DataFrame(pred, index=index).merge(submission_data, how="right", left_on="val_time", right_on="datetime")
+            # Set the predictions for the market bid
+            submission_data["market_bid"] = submission_data["q50"]
+            # Check if submission data has the right shape
+            if submission_data.shape != (48, 11):
+                logger.warning("There are less predictions values than there should be. Something seems to have gone wrong.")
+            # Check if submission data contains any NaN values
+            if submission_data.isna().any().any():
+                logger.warning("Predictions contain NaN values. Something seems to have gone wrong.")
+            # Check if submission data contains any negative values
+            if (submission_data.drop("datetime", axis=1) < 0).any().any():
+                logger.warning("Predictions contain negative values. Something seems to have gone wrong.")
+            logger.info("Successfully created dataframe of submission data.")
+        except Exception as e:
+            logger.error(f"Error occurred while creating the prediction dataframe: {e}")
+            return self._saved_state
+        
         # Prapare the submission data to the right format
-        submission_data = comp_utils.prep_submission_in_json_format(submission_data)
-        logger.info("Successfully converted dataframe of submission data to json format.")
-        self.predictions.update({"final": submission_data})
-
+        try:
+            submission_data = comp_utils.prep_submission_in_json_format(submission_data)
+            logger.info("Successfully converted dataframe of submission data to json format.")
+            self.predictions.update({"final": submission_data})
+        except Exception as e:
+            logging.error(f"Error occurred while converting the prediction dataframe to json format: {e}")
+            return self._saved_state
 
     def submit(self):
         """
