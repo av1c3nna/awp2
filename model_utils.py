@@ -57,6 +57,37 @@ class BaseModel:
         for qu in self.quantiles:
             score.append(self.pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean())
         return sum(score) / len(score)
+    
+    def sort_quantiles(self, data, quantiles):
+        """sorting quantiles so that smaller quantiles have smaller values"""
+        quantile_keys = [str(qu) for qu in quantiles]
+        
+        # create dataframe from dictionary with quantiles as feature
+        quantile_df = pd.DataFrame({key: data[key] for key in quantile_keys})
+        
+        # sorting quantiles
+        sorted_quantiles = np.sort(quantile_df.values, axis=1)
+        
+        # overwrite values in dictionary
+        for idx, key in enumerate(quantile_keys):
+            data[key] = sorted_quantiles[:, idx]
+        
+        return data
+
+    def replace_neg_values(self, data, quantiles):
+        """replacing neg values with 0"""
+
+        quantile_keys = [str(qu) for qu in quantiles] # keys
+
+        quantile_df = pd.DataFrame({key: data[key] for key in quantile_keys}) # dict to dataframe
+
+        quantile_df_no_negative = quantile_df.clip(lower=0) # replace values
+
+        #overwrite dictionary
+        for key in quantile_keys:
+            data[key] = quantile_df_no_negative[key].values
+
+        return data
 
     def plot_quantils(self, daterange, y, quantiles, year = 2023, month=8, day=False):
         """visualization for prediction"""
@@ -263,6 +294,10 @@ class QuantileRegressorModel(BaseModel):
             # Predict and store the results
             self.q_predictions[str(quantile)] = self.models[quantile].predict(self.feature_engineerer.X_test)
 
+        #sort results
+        self.q_predictions = self.sort_quantiles(self.q_predictions, self.quantiles)
+        self.q_predictions = self.replace_neg_values(self.q_predictions, self.quantiles)
+
         # **Set models_loaded to True after training so predict can be called immediately**
         self.models_loaded = True
 
@@ -277,7 +312,11 @@ class QuantileRegressorModel(BaseModel):
                 raise ValueError(f"Model for quantile {quantile} not available. Train or load the model first.")
             
             predictions[str(quantile)] = self.models[quantile].predict(X_test)
-        
+
+        #sort results
+        predictions = self.sort_quantiles(predictions, self.quantiles)
+        predictions = self.replace_neg_values(predictions, self.quantiles)
+
         return predictions
     
 
@@ -332,6 +371,10 @@ class LGBMRegressorModel(BaseModel):
             # Predict and store the results
             self.q_predictions[str(quantile)] = self.models[quantile].predict(self.feature_engineerer.X_test)
 
+        #sort results
+        self.q_predictions = self.sort_quantiles(self.q_predictions, self.quantiles)
+        self.q_predictions = self.replace_neg_values(self.q_predictions, self.quantiles)
+
         # **Set models_loaded to True after training so predict can be called immediately**
         self.models_loaded = True
 
@@ -347,6 +390,10 @@ class LGBMRegressorModel(BaseModel):
                 
             predictions[str(quantile)] = self.models[quantile].predict(X_test)
             
+        #sort results
+        predictions = self.sort_quantiles(predictions, self.quantiles)
+        predictions = self.replace_neg_values(predictions, self.quantiles)
+
         return predictions
     
     def plot_feature_importance(self, feature_dataset):
