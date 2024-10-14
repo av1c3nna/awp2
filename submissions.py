@@ -79,9 +79,8 @@ class AutoSubmitter:
         Fetches and converts weather data for the specified power source and weather model.
         """
         now = datetime.now()
-        yesterday = now - timedelta(days=1)
-        start_time = pd.Timestamp(datetime(yesterday.year, yesterday.month, yesterday.day, 23, 0, 0), tz='UTC')
-        end_time = start_time + timedelta(days=2)
+        start_time = pd.Timestamp(datetime(now.year, now.month, now.day, 23, 0, 0), tz='UTC')
+        end_time = start_time + timedelta(days=1)
 
         # Fetch weather data depending on the specified energy producer and weather model
         if power == "hornsea" and model == "DWD_ICON-EU":
@@ -112,11 +111,13 @@ class AutoSubmitter:
                 logger.error(f"Error occurred while fetching NCEP GFS PES Region 10 data: {e}")
                 return self._saved_state
 
-        # Limit weather data to the relevant time interval
         df_fetched = comp_utils.weather_df_to_xr(df_fetched).to_dataframe()
-        df_fetched = df_fetched[(df_fetched.index.get_level_values("valid_datetime") >= start_time) & 
-                                (df_fetched.index.get_level_values("valid_datetime") <= end_time)]
-        
+        # Check if the dataframe contains all relevant timestamps
+        if len(df_fetched[(df_fetched.index.get_level_values("valid_datetime") >= start_time) & 
+                          (df_fetched.index.get_level_values("valid_datetime") <= end_time)]
+                          .groupby("valid_datetime")) < 25:
+            logger.warning("Fetched weather data does not appear to contain all relevant timestamps. Model predictions could be incomplete.")
+
         return df_fetched
     
 
@@ -152,9 +153,6 @@ class AutoSubmitter:
         """
         Preprocesses the weather data for the specified power source.
         """
-        now = datetime.now()
-        now = pd.Timestamp(datetime(now.year, now.month, now.day, 17, 0, 0), tz='UTC')
-        market_end_time = now + timedelta(hours=29, minutes=30)
         preprocessor = Preprocessing()
         
         # Preprocess weather data depending on the specified energy producer
@@ -180,8 +178,6 @@ class AutoSubmitter:
                 logger.error(f"Error occured while preprocessing PES Region 10 data: {e}")
                 return self._saved_state
            
-        # Limit preprocessed weather data data to the relevant time interval
-        df_preprocessed = df_preprocessed[(df_preprocessed.index >= now) & (df_preprocessed.index <= market_end_time)]
         getattr(self, f"{power}_data").update({"df_preprocessed": df_preprocessed})
 
         return df_preprocessed
@@ -238,13 +234,14 @@ class AutoSubmitter:
         logger.info("Making predictions...")
         self._saved_state = copy.deepcopy(self)
 
-        # Make a prediction within the market time interval for the next day
+        # Make a prediction for Hornsea 1 within the market time interval for the next day
         try:
             pred_hornsea = self.hornsea_model.predict(self.hornsea_data["array_prepared"])
             logger.info("Successfully completed prediction for Hornsea 1.")
         except Exception as e:
             logger.error(f"Error occurred while making a prediction on Hornsea 1 data: {e}")
             return self._saved_state
+        # Make a prediction for PES Region 10 within the market time interval for the next day
         try:
             pred_pes = self.pes_model.predict(self.pes_data["array_prepared"])
             logger.info("Successfully completed prediction for PES Region 10.")
@@ -273,7 +270,18 @@ class AutoSubmitter:
         # Merge the prediction dictionary with the dataframe on the right market times of the next day.
         index = self.hornsea_data["df_preprocessed"].index
         submission_data = pd.DataFrame(pred, index=index).merge(submission_data, how="right", left_on="val_time", right_on="datetime")
+        # Set the predictions for the market bid
         submission_data["market_bid"] = submission_data["q50"]
+        # Check if submission data has the right shape
+        print(submission_data.shape)
+        if submission_data.shape != (48, 11):
+            logger.warning("There are less predictions values than there should be. Something seems to have gone wrong.")
+        # Check if submission data contains any NaN values
+        if submission_data.isna().any().any():
+            logger.warning("Predictions contain NaN values. Something seems to have gone wrong.")
+        # Check if submission data contains any negative values
+        if (submission_data.drop("datetime", axis=1) < 0).any().any():
+            logger.warning("Predictions contain negative values. Something seems to have gone wrong.")
         logger.info("Successfully created dataframe of submission data.")
 
         # Prapare the submission data to the right format
@@ -288,6 +296,7 @@ class AutoSubmitter:
         """
 
         while True:
+            # Ask the user if they want to proceed with the submission
             response = input("Submit results? (y/n)")
             if response == "y":
                 logger.info("Submitting results...")
@@ -308,6 +317,4 @@ class AutoSubmitter:
                 logger.info("Invalid input. Please enter 'y' or 'n'.")
 
 
-
-# Zeiten checken (Prüfungen und UTC Verständnis)
-# Prüfen, ob submission daten richtig sind
+# Zeit - merging checken
