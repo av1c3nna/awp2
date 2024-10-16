@@ -12,6 +12,8 @@ import lightgbm as lgb
 from lightgbm import early_stopping, log_evaluation
 import matplotlib.dates as mdates
 from datetime import datetime, date
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.model_selection import TimeSeriesSplit
 
 
 def pinball(y, q, alpha):
@@ -24,6 +26,15 @@ def pinball_score(df, quantiles):
         score.append(pinball(y=df["true"],
                              q=df[f"{qu}"],
                              alpha=qu/100).mean())
+    return sum(score)/len(score)  # avg pinball score
+
+def pinball_score_nn(df, quantiles):
+    score = list()
+    for qu in quantiles:
+        # pinball loss for every quantile
+        score.append(pinball(y=df["true"],
+                             q=df[f"{qu}"],
+                             alpha=qu).mean())
     return sum(score)/len(score)  # avg pinball score
 
 
@@ -347,7 +358,47 @@ class LGBMRegressorModel(BaseModel):
         for quantile in self.quantiles:
             if not self.load_pretrained or quantile not in self.models:
                 # Train a new model for this quantile
-                qr_lgbm = lgb.LGBMRegressor(objective='quantile', alpha=quantile, n_estimators=1000, force_col_wise=True)
+
+                params = {
+                    "alpha":[quantile],
+                    'boosting': ["gbdt", "dart"],
+                    "force_col_wise": [True],
+                    "num_iterations": [100, 200, 500],
+                    "num_leaves": np.linspace(20, 100, 10, dtype = int).tolist(),
+                    "max_depth": np.linspace(5, 15, 6, dtype = int).tolist(),
+                    'learning_rate': np.logspace(-3, -1, 10).round(4).tolist(),
+                    "n_estimators": [500, 1000, 1500],
+                    #"subsample_for_bin": [],
+                    'objective': ['quantile'],
+                    #"min_split_gain": [],
+                    #"min_sum_hessian_in_leaf:[] #for overfitting"
+                    #"min_child_weight": [45],
+                    # "min_child_samples":[20],
+                    "min_data_in_leaf":np.linspace(50, 500, 20, dtype = int).tolist(),
+                    #"tree_trainer":["serial", "feature", "data", "voting"],
+                    # "feature_fraction_bynode": [1.0, 0.8, 0.5],
+                    # "feature_fraction":[0.5, 0.8, 1.0],
+                    # "bagging_fraction":[0.5, 0.8, 1.0],
+                    #"subsample": [],
+                    #"subsample_freq": [],
+                    # "colsample_bytree": [0.3, 0.5, 1],
+                    # "reg_alpha": np.logspace(-3, -1, 10).tolist(),
+                    # "reg_lambda": np.logspace(-2, -1, 10).tolist(),
+                    "random_state": [42],
+                    "verbose":[-1],
+                    #"device_type":["cuda"],
+                    "extra_trees":[False],
+                    # "path_smooth":[0.0, 0.2]
+                    #"importance_type":[]
+                }
+          
+                qr_lgbm_model = lgb.LGBMRegressor()
+                cv = TimeSeriesSplit(2)
+                qr_lgbm = RandomizedSearchCV(qr_lgbm_model, param_distributions = params, cv = cv, n_iter = 10, 
+                                             #scoring = scorer
+                                             )
+
+
                 qr_lgbm.fit(
                     self.feature_engineerer.X_train, 
                     self.feature_engineerer.y_train,
