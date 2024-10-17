@@ -14,6 +14,7 @@ import matplotlib.dates as mdates
 from datetime import datetime, date
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import make_scorer
 
 
 def pinball(y, q, alpha):
@@ -44,7 +45,7 @@ class BaseModel:
 
     def __init__(self, feature_engineerer, quantiles, model_save_dir, load_pretrained=False):
         self.feature_engineerer = feature_engineerer
-        self.quantiles = quantiles
+        self.quantiles = quantiles.round(2)
         self.q_predictions = {"true": feature_engineerer.y_test.values}
         self.model_save_dir = model_save_dir
         self.load_pretrained = load_pretrained
@@ -330,7 +331,11 @@ class QuantileRegressorModel(BaseModel):
 
         return predictions
     
-
+# Define pinball loss function
+def pinball_loss(y_true, y_pred, quantile=0.9):
+    delta = y_true - y_pred
+    loss = np.where(delta > 0, quantile * delta, (1 - quantile) * - delta)
+    return np.mean(loss)
 
 class LGBMRegressorModel(BaseModel):
     """lightgbm quantile regression"""
@@ -359,23 +364,26 @@ class LGBMRegressorModel(BaseModel):
             if not self.load_pretrained or quantile not in self.models:
                 # Train a new model for this quantile
 
+                # Create a custom scorer for quantile regression (e.g., 90th percentile)
+                scorer = make_scorer(pinball_loss, greater_is_better=False, quantile=quantile)
+
                 params = {
                     "alpha":[quantile],
                     'boosting': ["gbdt", "dart"],
                     "force_col_wise": [True],
-                    "num_iterations": [100, 200, 500],
-                    "num_leaves": np.linspace(20, 100, 10, dtype = int).tolist(),
-                    "max_depth": np.linspace(5, 15, 6, dtype = int).tolist(),
-                    'learning_rate': np.logspace(-3, -1, 10).round(4).tolist(),
-                    "n_estimators": [500, 1000, 1500],
+                    #"num_iterations": [100, 200, 500],
+                    "num_leaves": np.linspace(20, 40, 5, dtype = int).tolist(),
+                    "max_depth": [2, 3, 5, 7, 8, 10, 12],
+                    'learning_rate': np.logspace(-2, -1, 10).round(4).tolist(),
+                    "n_estimators": [250, 500],
                     #"subsample_for_bin": [],
                     'objective': ['quantile'],
                     #"min_split_gain": [],
                     #"min_sum_hessian_in_leaf:[] #for overfitting"
                     #"min_child_weight": [45],
                     # "min_child_samples":[20],
-                    "min_data_in_leaf":np.linspace(50, 500, 20, dtype = int).tolist(),
-                    #"tree_trainer":["serial", "feature", "data", "voting"],
+                    "min_data_in_leaf":np.linspace(200, 500, 10, dtype = int).tolist(),
+                    "tree_trainer":["serial", "feature", "data", "voting"],
                     # "feature_fraction_bynode": [1.0, 0.8, 0.5],
                     # "feature_fraction":[0.5, 0.8, 1.0],
                     # "bagging_fraction":[0.5, 0.8, 1.0],
@@ -391,14 +399,13 @@ class LGBMRegressorModel(BaseModel):
                     # "path_smooth":[0.0, 0.2]
                     #"importance_type":[]
                 }
-          
-                qr_lgbm_model = lgb.LGBMRegressor()
+                # Train a new model for this quantile
+                # qr_lgbm1 = lgb.LGBMRegressor(objective='quantile', alpha=quantile, n_estimators=1000, force_col_wise=True, params = params)
+                qr_lgbm1 = lgb.LGBMRegressor()
                 cv = TimeSeriesSplit(2)
-                qr_lgbm = RandomizedSearchCV(qr_lgbm_model, param_distributions = params, cv = cv, n_iter = 10, 
-                                             #scoring = scorer
+                qr_lgbm = RandomizedSearchCV(qr_lgbm1, param_distributions = params, cv = cv, n_iter = 20, 
+                                             scoring = scorer
                                              )
-
-
                 qr_lgbm.fit(
                     self.feature_engineerer.X_train, 
                     self.feature_engineerer.y_train,
@@ -406,7 +413,10 @@ class LGBMRegressorModel(BaseModel):
                               (self.feature_engineerer.X_val, self.feature_engineerer.y_val)],
                     eval_names=['train', 'valid'],
                     eval_metric='quantile',
-                    callbacks=[early_stopping(stopping_rounds=50), log_evaluation(50)]
+                    callbacks=[early_stopping(stopping_rounds=10,
+                                               #min_delta = 0.01
+                                               ), 
+                                               log_evaluation(200)]
                 )
 
                 # Save the model

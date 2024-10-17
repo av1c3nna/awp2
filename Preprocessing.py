@@ -5,7 +5,7 @@ import xarray
 import pandas as pd
 import os
 import json
-from datetime import datetime
+from datetime import datetime, date
 from math import sin, cos, pi
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, MinMaxScaler, RobustScaler
 from sklearn.model_selection import train_test_split, TimeSeriesSplit
@@ -194,6 +194,8 @@ class Preprocessing:
                 only_labels = False
             energy_df = self.preprocess_energy_data(energy_df, deployment = deployment, only_labels = only_labels)
             df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge, deployment = deployment)
+
+        df = df.drop(["forecast_horizon"], axis = 1)
 
         # sort the columns alphabetically to avoid errors during the Feature Engineering (aka keep the same order)
         df = df.reindex(sorted(df.columns), axis=1)
@@ -519,6 +521,7 @@ class Preprocessing:
         if "rel_hum" in df.columns:
             df.loc[df["rel_hum"] > 100, "rel_hum"] = 100
             df.loc[df["rel_hum"] < 0, "rel_hum"] = 0
+            df = df.drop(["rel_hum"], axis = 1)
                 
         if "total_prec" in df.columns:
             df.loc[df["total_prec"] < 0, "total_prec"] = 0
@@ -543,7 +546,7 @@ class Preprocessing:
             - df: cleaned weather data.
         """
         features = list(df.columns)
-        for i in ["ref_time", "val_time", "lat", "long", "forecast_horizon"]:
+        for i in ["ref_time", "val_time", "lat", "long"]:
             if i in features:
                 features.remove(i)
                 
@@ -683,6 +686,11 @@ class Preprocessing:
                 df[f"{feature}_min_3h"] = df[f"{feature}"].rolling(6).min()
                 df[f"{feature}_max_3h"] = df[f"{feature}"].rolling(6).max()
 
+                df[f"{feature}_mean_1h"] = df[f"{feature}"].rolling(2).mean()
+                df[f"{feature}_std_1h"] = df[f"{feature}"].rolling(2).std()
+                df[f"{feature}_min_1h"] = df[f"{feature}"].rolling(2).min()
+                df[f"{feature}_max_1h"] = df[f"{feature}"].rolling(2).max()
+
                 df[f"{feature}_next_forecast"] = df[f"{feature}"].shift(-1)
 
         df = df.sort_values("val_time")
@@ -725,7 +733,7 @@ class Preprocessing:
             df["temp_range_3h"] = df["temp_max_3h"] - df["temp_min_3h"]
 
         # add the cyclic encoded features to the dataset.
-        for col in ["month", "day", "dayofweek", "hour"]:
+        for col in ["month", "day", "hour"]:
             time_col_sin = "sin_" + col
             time_col_cos = "cos_" + col
 
@@ -835,7 +843,7 @@ class Preprocessing:
             - data: output data.
         """
 
-        for col in ['rel_hum', 'temp', 'total_precipitation',
+        for col in ['temp', 'total_precipitation',
                     'wind_direction', 'wind_speed', "wind_speed_100",
                     'cloud_cover', 'solar_down_rad',
                     "unused_capacity_mwp"]:
@@ -917,7 +925,7 @@ class FeatureEngineerer:
 
             #self.train_val_test_split(data)
 
-            self.train_val_test_split_by_year(data)
+            self.train_val_test_split_hardcoded(data)
 
         if len(self.columns_to_ohe) > 0:
             self.onehotencode(data, deployment = deployment)
@@ -947,20 +955,37 @@ class FeatureEngineerer:
 
 
 
-    def train_val_test_split_by_year(self, data, test_duration=12, val_duration=12):
-        """Perform a train-val-test split by the timespan of a year."""
+    # def train_val_test_split_by_year(self, data, test_duration=12, val_duration=12):
+    #     """Perform a train-val-test split by the timespan of a year."""
 
-        data = data.sort_index()
-        max_date = data.index.max()
-        test_start_date = max_date - timedelta(weeks=52*test_duration/12)
-        test_end_date = test_start_date + timedelta(weeks=26)
-        val_end_date = test_start_date - timedelta(days=1)
-        val_start_date = val_end_date - timedelta(weeks=52*val_duration/12)
+    #     data = data.sort_index()
+    #     max_date = data.index.max()
+    #     test_start_date = max_date - timedelta(weeks=52*test_duration/12)
+    #     test_end_date = test_start_date + timedelta(weeks=26)
+    #     val_end_date = test_start_date - timedelta(days=1)
+    #     val_start_date = val_end_date - timedelta(weeks=52*val_duration/12)
 
-        train_data = data[data.index < val_start_date]
-        val_data = data[(data.index >= val_start_date) & (data.index <= val_end_date)]
-        test_data = data[(data.index >= test_start_date) & (data.index <= test_end_date)]
+    #     train_data = data[data.index < val_start_date]
+    #     val_data = data[(data.index >= val_start_date) & (data.index <= val_end_date)]
+    #     test_data = data[(data.index >= test_start_date) & (data.index <= test_end_date)]
         
+    #     # Entferne die Spalten, die nicht benötigt werden
+    #     self.X_train = train_data.drop(self.labels_to_remove, axis=1)
+    #     self.y_train = train_data[self.label]
+
+    #     self.X_val = val_data.drop(self.labels_to_remove, axis=1)
+    #     self.y_val = val_data[self.label]
+
+    #     self.X_test = test_data.drop(self.labels_to_remove, axis=1)
+    #     self.y_test = test_data[self.label]
+
+
+    def train_val_test_split_hardcoded(self, data):
+        
+        train_data = data[data.index.date < date(2023, 1, 1)]
+        val_data = data[(data.index.date >= date(2023, 1, 1)) & (data.index.date < date(2023, 7, 1))]
+        test_data = data[(data.index.date >= date(2023, 7, 1)) & (data.index.date < date(2024, 1, 1))]
+
         # Entferne die Spalten, die nicht benötigt werden
         self.X_train = train_data.drop(self.labels_to_remove, axis=1)
         self.y_train = train_data[self.label]
