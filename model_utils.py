@@ -39,6 +39,13 @@ def pinball_score_nn(df, quantiles):
     return sum(score)/len(score)  # avg pinball score
 
 
+def pinball_score_nn_single(df, qu):
+    score = pinball(y=df["true"],
+                             q=df[f"{qu}"],
+                             alpha=qu).mean()
+    return score
+
+
 # Base Model Class
 class BaseModel:
     """super class for pinball score and visualization"""

@@ -27,13 +27,26 @@ class q_model(nn.Module):
         
     def build_model(self): 
         # LSTMs cannot be used inside nn.Sequential because they return tuples
-        self.lstm1 = nn.LSTM(self.len_features, 50, dropout=0.3, batch_first=True)
-        self.lstm2 = nn.LSTM(50, 25, dropout=0.3, batch_first=True)
-        self.lstm3 = nn.LSTM(25, 10, dropout=0.5, batch_first=True)
+        # self.lstm1 = nn.LSTM(self.len_features, 50, dropout=0.5, batch_first=True)
+        # self.linear1 = nn.Linear(50, 150)
+        # self.linear2 = nn.Linear(150, 80)
+        # self.linear3 = nn.Linear(80, 40)
+        # self.linear4 = nn.Linear(40, 20)
+        # self.activation = nn.ReLU()
+
+        self.lstm1 = nn.LSTM(self.len_features, int(0.5*self.len_features), dropout = 0.3)
+        # self.lstm2 = nn.LSTM(int(0.5*self.len_features), int(0.25*self.len_features), dropout = 0.3, batch_first = True)
+        self.linear1 = nn.Linear(int(0.5*self.len_features), int(0.25*self.len_features))
+        self.dropout1 = nn.Dropout(0.3)
+        self.linear2 = nn.Linear(int(0.25*self.len_features), 20)
+        self.dropout2 = nn.Dropout(0.3)
+
+        self.activation = nn.ReLU()
+
         
         # Final layers for quantiles
         final_layers = [
-            nn.Linear(10, 1) for _ in range(len(self.quantiles))
+            nn.Linear(20, 1) for _ in range(len(self.quantiles))
         ]
         self.final_layers = nn.ModuleList(final_layers)
 
@@ -41,9 +54,27 @@ class q_model(nn.Module):
         # x is of shape (batch_size, seq_len, len_features)
         
         # LSTM layers - extracting the output (not hidden and cell states)
+        # out, _ = self.lstm1(x)
+        # # out, _ = self.lstm2(out)
+        # # out, _ = self.lstm3(out)
+
+        # out = self.linear1(out)
+        # out = self.activation(out)
+        # out = self.linear2(out)
+        # out = self.activation(out)
+        # out = self.linear3(out)
+        # out = self.activation(out)
+        # out = self.linear4(out)
+        # out = self.activation(out)
+
         out, _ = self.lstm1(x)
-        out, _ = self.lstm2(out)
-        out, _ = self.lstm3(out)
+        #out, _ = self.lstm2(out)
+        out = self.linear1(out)
+        out = self.activation(out)
+        out = self.linear2(out)
+        out = self.activation(out)
+
+        
         
         # Apply final layers to get quantile outputs
         quantile_outputs = [layer(out) for layer in self.final_layers]
@@ -51,6 +82,10 @@ class q_model(nn.Module):
         return torch.cat(quantile_outputs, dim=-1)
         
     def init_weights(self):
+        for m in [self.linear1, self.linear2]:
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight)
+                nn.init.constant_(m.bias, 0)  
         for m in chain(self.final_layers):
             if isinstance(m, nn.Linear):
                 nn.init.orthogonal_(m.weight)
@@ -76,8 +111,25 @@ class QuantileLoss(nn.Module):
         loss = torch.mean(torch.sum(torch.cat(losses, dim=1), dim=1))
         return loss
     
+class QuantileLoss2(nn.Module):
+    def __init__(self, quantiles):
+        super().__init__()
+        self.quantiles = quantiles
+        
+    def forward(self, preds, target):
+        assert not target.requires_grad
+        assert preds.size(0) == target.size(0)
+        losses = []
+        for i, q in enumerate(self.quantiles):
+            errors = target - preds[:, i]
+            errors2 = preds[:, i] - target
+            losses.append(torch.max((1 - q) * errors2, q * errors).unsqueeze(1))
+        loss = torch.mean(torch.sum(torch.cat(losses, dim=1), dim=1))
+        return loss
+    
 class Learner(model_utils.BaseModel):
-    def __init__(self, model, optimizer_class, loss_func):
+    def __init__(self, model, optimizer_class, loss_func, lr):
+        self.lr = lr
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
         self.optimizer = optimizer_class(self.model.parameters())
@@ -113,35 +165,39 @@ class Learner(model_utils.BaseModel):
         else:
             self.model.eval()
         return self.model(torch.from_numpy(x).to(self.device).requires_grad_(False)).cpu().detach().numpy()
-    
+
+import pytorch_forecasting
 
 class Trainer(model_utils.BaseModel):
-    def __init__(self, feature_engineerer, model_class, quantiles, optimizer_class=torch.optim.Adam, in_shape=50, dropout=0.1, weight_decay=1e-6):
+    def __init__(self, feature_engineerer, model_class, quantiles, optimizer_class=torch.optim.Adam, in_shape=50, dropout=0.1, weight_decay=1e-6, lr = 0.01, batch_size = 96):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.quantiles = quantiles
         self.feature_engineerer = feature_engineerer
-        self.loss_func = QuantileLoss(self.quantiles)
+        self.loss_func = QuantileLoss2(self.quantiles)
+        self.lr = lr
+        self.batch_size = batch_size
         
         # Define model, loss function, and optimizer
         self.model = model_class(self.quantiles,in_shape=in_shape, dropout=dropout, len_features = len(self.feature_engineerer.features_after_fe)).to(self.device)
         self.learner = Learner(
             self.model, 
             partial(optimizer_class, weight_decay=weight_decay),
-            self.loss_func
+            self.loss_func,
+            lr = self.lr
         )
 
-    def fit(self, epochs=150, batch_size=144):
+    def fit(self, epochs=150):
         self.X_train = self.feature_engineerer.X_train
         self.y_train = self.feature_engineerer.y_train.values
 
-        self.learner.fit(self.X_train, self.y_train, epochs, batch_size)
+        self.learner.fit(self.X_train, self.y_train, epochs, self.batch_size)
 
     def predict(self, prediction_set):
         self.y_pred = self.learner.predict(prediction_set.astype(np.float32))
         return self.y_pred
     
-    def train_and_test(self, epochs=150, batch_size=144):
-        Trainer.fit(self, epochs=epochs, batch_size=batch_size)
+    def train_and_test(self, epochs=200):
+        Trainer.fit(self, epochs=epochs)
         self.q_prediction_nn = {}
         self.predictionset = self.feature_engineerer.X_test.astype(np.float32)
         self.q_prediction_nn["true"] = self.feature_engineerer.y_test.values
@@ -153,4 +209,4 @@ class Trainer(model_utils.BaseModel):
             self.q_prediction_nn[str(quantile)] = self.y_pred[:, i]
 
         self.q_prediction_nn_df = pd.DataFrame(self.q_prediction_nn)
-        print(f"pinball score {model_utils.pinball_score(self.q_prediction_nn_df, quantiles=self.quantiles)}")
+        print(f"pinball score {model_utils.pinball_score_nn(self.q_prediction_nn_df, quantiles=self.quantiles)}")
