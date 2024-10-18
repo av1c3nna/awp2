@@ -47,29 +47,64 @@ class AutoSubmitter:
         """
         logger.info("Fetching data...")
         self._saved_state = copy.deepcopy(self)
+        
+        # Create directory to save fetched data
+        today = datetime.today().strftime('%Y-%m-%d')
+        base_dir = os.path.join("fetched_data", today)
+        
+        # Create path if not exists
+        def ensure_dir(path):
+            if not os.path.exists(path):
+                os.makedirs(path)
+                logger.info(f"Created directory: {path}")
+            return path
 
         # Fetch weather data for Hornsea 1
+        hornsea_dir = ensure_dir(os.path.join(base_dir, "hornsea"))
         hornsea_dwd_fetched = self._fetch_data(power="hornsea", model="DWD_ICON-EU")
         logger.info("Successfully fetched DWD weather data for Hornsea 1.")
         hornsea_gfs_fetched = self._fetch_data(power="hornsea", model="NCEP_GFS")
         logger.info("Successfully fetched NCEP GFS weather data for Hornsea 1.")
         self.hornsea_data.update({"dwd_fetched": hornsea_dwd_fetched, "gfs_fetched": hornsea_gfs_fetched})
+
+        # Locally save fetched Hoensea 1 data (long-term)
+        hornsea_dwd_fetched.to_csv(os.path.join(hornsea_dir, "dwd_fetched.csv"))
+        hornsea_gfs_fetched.to_csv(os.path.join(hornsea_dir, "gfs_fetched.csv"))
         
         # Fetch weather data for PES Region 10
+        pes_dir = ensure_dir(os.path.join(base_dir, "pes"))
         pes_dwd_fetched = self._fetch_data(power="pes", model="DWD_ICON-EU")
         logger.info("Successfully fetched DWD weather data for Hornsea 1.")
         pes_gfs_fetched = self._fetch_data(power="pes", model="NCEP_GFS")
         logger.info("Successfully fetched NCEP GFS weather data for PES Region 10.")
         self.pes_data.update({"dwd_fetched": pes_dwd_fetched, "gfs_fetched": pes_gfs_fetched})
         
-        # Locally save data on the amount of power currently generated in the PES 10 region
-        if not os.path.exists("energy_data_fetched"):
-             os.makedirs("energy_data_fetched")
-        logger.info("Created directory for energy data.")
+        # Locally save fetched PES Region 10 data (long-term)
+        pes_dwd_fetched.to_csv(os.path.join(pes_dir, "dwd_fetched.csv"))
+        pes_gfs_fetched.to_csv(os.path.join(pes_dir, "gfs_fetched.csv"))
+
+        # Create directory to save fetched energy data (short-term)
+        if not os.path.exists("energy_fetched_temporary"):
+            os.makedirs("energy_fetched_temporary")
+            logger.info("Created directory for energy data.")
+
+        # Fetch energy data
         today = datetime.today().strftime('%Y-%m-%d')
         energy_fetched = self.rebase_api_client.get_variable(day=today, variable="solar_total_production").rename({"timestamp_utc": "dtm"}, axis=1)
-        energy_fetched.to_csv("energy_data_fetched/energy_fetched.csv")
-        logger.info("Successfully fetched and saved energy data.")
+        
+        # Check if at least one timestamp of fetched energy data and fetched weather data overlaps (This in important in order to correctly perform the preprocessing)
+        energy_fetched_copy = energy_fetched.copy()
+        energy_fetched_copy["dtm"] = pd.to_datetime(energy_fetched_copy["dtm"])
+        if len(pes_dwd_fetched.merge(energy_fetched_copy["dtm"], how="inner", left_on="valid_datetime", right_on="dtm")) == 0:
+            logger.warning("No overlapping timestamps of fetched energy data and fetched weather data. Capacity_mwp might be empty.")
+
+        # Locally save fetched energy data (short-term)
+        energy_fetched.to_csv("energy_fetched_temporary/energy_fetched.csv")
+        logger.info("Successfully fetched and saved energy data (overwriting daily).")
+
+        # Locally save fetched energy data (long-term)
+        energy_dir = ensure_dir(os.path.join(base_dir, "energy"))
+        energy_fetched.to_csv(os.path.join(energy_dir, "energy_fetched.csv"))
         
         return self
     
@@ -174,7 +209,7 @@ class AutoSubmitter:
         elif power == "pes":
             try:
                 geo_data_dict = {"dwd": self.pes_data["dwd_fetched"], "ncep": self.pes_data["gfs_fetched"]}
-                energy_data_dict = {"energy_fetched": "energy_data_fetched"}
+                energy_data_dict = {"energy_fetched": "energy_fetched_temporary"}
                 df_preprocessed = preprocessor.perform_preprocessing_pipeline(geo_data_dict,
                                                                             deployment=True,
                                                                             json_file_path="REMIT",
@@ -278,7 +313,7 @@ class AutoSubmitter:
             index = self.hornsea_data["df_preprocessed"].index
             submission_data = pd.DataFrame(pred, index=index).merge(submission_data, how="right", left_on="val_time", right_on="datetime")
             # Set the predictions for the market bid
-            submission_data["market_bid"] = submission_data["q50"]
+            submission_data["market_bid"] = submission_data["q40"]
             # Check if submission data has the right shape
             if submission_data.shape != (48, 11):
                 logger.warning("There are less predictions values than there should be. Something seems to have gone wrong.")
@@ -301,6 +336,7 @@ class AutoSubmitter:
         except Exception as e:
             logging.error(f"Error occurred while converting the prediction dataframe to json format: {e}")
             return self._saved_state
+
 
     def submit(self):
         """
@@ -329,4 +365,8 @@ class AutoSubmitter:
                 logger.info("Invalid input. Please enter 'y' or 'n'.")
 
 
-# Zeit - merging checken
+# Bei Implementierung des trading modells beachten: "The volume of energy traded in a single period is limited to the range 0 MWh to 1800 MWh, the
+# maximum generation output of the hybrid power plant. Bids outside of this range will be rejected by
+# the submission API."
+
+# wetter und energie daten speichern
