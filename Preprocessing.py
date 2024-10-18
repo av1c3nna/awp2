@@ -808,13 +808,13 @@ class Preprocessing:
         merged_data = geo_data.merge(energy_data, left_on = left_merge, right_on = right_merge, how = how_to_merge)
         merged_data = merged_data.bfill()
         merged_data = merged_data.ffill()
-
-        if merged_data.shape[0] == 0 and deployment:
+  
+        if ("capacity_mwp" in merged_data.columns and merged_data[merged_data.isna().any(axis = 1)].shape[0] > 0):
+            logging.warning("Energy data seems to be empty. Maybe check out for overlapping time intervals? Replacing missing capacity values with last known constants.")
             geo_data["installed_capacity_mwp"] = 2956.7452510000003
             geo_data["capacity_mwp"] = 2779.2829846
             geo_data["unused_capacity_mwp"] = geo_data["installed_capacity_mwp"] - geo_data["capacity_mwp"]
             merged_data = geo_data.copy()
-
 
         for col in self.non_numerical_columns[:]:
             # check for valid input
