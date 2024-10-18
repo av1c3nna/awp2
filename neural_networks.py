@@ -19,7 +19,7 @@ def save_pytorch_model(model, model_name):
 
 def load_pytorch_model(class_name, model_name, len_features, quantiles = np.arange(0.1, 1.0, 0.1).round(2)):
     model = class_name(quantiles = quantiles, len_features = len_features)
-    model.load_state_dict(torch.load(f"{model_name}", weights_only=True))
+    return model.load_state_dict(torch.load(f"{model_name}", weights_only=True))
 
 class q_model(nn.Module):
     def __init__(self, 
