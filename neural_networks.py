@@ -39,10 +39,8 @@ class q_model(nn.Module):
         self.init_weights()
         
     def build_model(self): 
-        self.linear1 = nn.Linear(50, 150)
-        self.linear2 = nn.Linear(150, 80)
-        self.linear3 = nn.Linear(80, 40)
-        self.linear4 = nn.Linear(40, 20)
+        self.linear1 = nn.Linear(self.len_features, 50)
+        self.linear2 = nn.Linear(50, 20)
         self.activation = nn.ReLU()
 
         
@@ -57,10 +55,6 @@ class q_model(nn.Module):
         out = self.linear1(out)
         out = self.activation(out)
         out = self.linear2(out)
-        out = self.activation(out)
-        out = self.linear3(out)
-        out = self.activation(out)
-        out = self.linear4(out)
         out = self.activation(out)
 
         # Apply final layers to get quantile outputs
