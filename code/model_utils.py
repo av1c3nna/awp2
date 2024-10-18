@@ -28,6 +28,37 @@ def pinball_score(df, quantiles):
                              alpha=qu).mean())
     return sum(score)/len(score)  # avg pinball score
 
+def plot_quantile_performance(model_list, model_names, title, quantiles):
+    # Dictionary, um Scores für alle Modelle zu speichern
+    quantile_scores = {qu: [] for qu in quantiles}
+
+    for model in model_list:
+        # Flatten the predictions
+        model.q_predictions = {k: v.flatten() for k, v in model.q_predictions.items() if k != "date"}
+        df = pd.DataFrame(model.q_predictions)
+
+        # Berechnung der Pinball-Scores für jedes Quantil
+        for qu in quantiles:
+            score = pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean()
+            quantile_scores[qu].append(score)  # Score zum entsprechenden Quantil hinzufügen
+
+    
+    num_models = len(model_list)
+    bar_width = 0.15  
+    index = np.arange(len(quantiles))
+
+    
+    for i, model_scores in enumerate(zip(*quantile_scores.values())):
+        plt.bar(index + i * bar_width, model_scores, bar_width, label=model_names[i])
+
+    plt.xlabel('Quantile')
+    plt.ylabel('Pinball Score')
+    plt.title(title)
+    plt.xticks(index + bar_width * (num_models - 1) / 2, quantiles)  
+    plt.legend(title='Models')
+    plt.tight_layout()
+    plt.show()
+
 
 # Base Model Class
 class BaseModel:
@@ -385,7 +416,7 @@ class LGBMRegressorModel(BaseModel):
         # **Set models_loaded to True after training so predict can be called immediately**
         self.models_loaded = True
 
-    def train_and_predict_hyperparametertuning(self, parameters):
+    def train_and_predict_hyperparametertuning(self, parameters, search="GridSearch"):
         """Train the LGBMRegressor models or use the pretrained ones."""
         
         cv = TimeSeriesSplit(n_splits=3)
@@ -396,24 +427,38 @@ class LGBMRegressorModel(BaseModel):
             if not self.load_pretrained or quantile not in self.models:
                 # Train a new model for this quantile
                 lgbm = lgb.LGBMRegressor(objective='quantile', alpha=quantile, verbose=-1)
-                grid_lgbm = GridSearchCV(estimator=lgbm, param_grid=parameters, cv=cv, n_jobs=-1, scoring = scorer)
-                grid_lgbm.fit(
-                    self.feature_engineerer.X_train, 
-                    self.feature_engineerer.y_train,
-                    eval_set=[(self.feature_engineerer.X_train, self.feature_engineerer.y_train), 
-                              (self.feature_engineerer.X_val, self.feature_engineerer.y_val)],
-                    eval_names=['train', 'valid'],
-                    eval_metric='quantile',
-                    callbacks=[early_stopping(stopping_rounds=50),log_evaluation(25)]
-                )
+
+                if search == "GridSearch":
+                    grid_lgbm = GridSearchCV(estimator=lgbm, param_grid=parameters, cv=cv, n_jobs=-1, scoring = scorer)
+                    grid_lgbm.fit(
+                        self.feature_engineerer.X_train, 
+                        self.feature_engineerer.y_train,
+                        eval_set=[(self.feature_engineerer.X_train, self.feature_engineerer.y_train), 
+                                (self.feature_engineerer.X_val, self.feature_engineerer.y_val)],
+                        eval_names=['train', 'valid'],
+                        eval_metric='quantile',
+                        callbacks=[early_stopping(stopping_rounds=50),log_evaluation(25)]
+                    )
+                if search == "RandomSearch":
+                    grid_lgbm = RandomizedSearchCV(estimator=lgbm, param_distributions=parameters, cv=cv, n_jobs=-1, scoring = scorer, n_iter=20)
+                    grid_lgbm.fit(
+                        self.feature_engineerer.X_train, 
+                        self.feature_engineerer.y_train,
+                        eval_set=[(self.feature_engineerer.X_train, self.feature_engineerer.y_train), 
+                                (self.feature_engineerer.X_val, self.feature_engineerer.y_val)],
+                        eval_names=['train', 'valid'],
+                        eval_metric='quantile',
+                        callbacks=[early_stopping(stopping_rounds=50),log_evaluation(25)]
+                    )
 
                 # Save the model
                 model_filename = os.path.join(self.model_save_dir, f"lgbm_model_quantile_{quantile}.pkl")
-                joblib.dump(grid_lgbm, model_filename)
+                joblib.dump(grid_lgbm.best_estimator_, model_filename)
                 print(f"Saved Quantile Regressor model for quantile {quantile} to {model_filename}")
 
                 # Store the model for prediction
-                self.models[quantile] = grid_lgbm
+                print(grid_lgbm.best_params_)
+                self.models[quantile] = grid_lgbm.best_estimator_
             else:
                 print(f"Using the loaded pretrained Quantile Regressor model for quantile {quantile}")
 
