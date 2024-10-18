@@ -165,7 +165,7 @@ class Preprocessing:
         else:
             logging.critical("Input must be either a file path or a pandas.DataFrame object.")
             sys.exit(0)
-            
+        
         logging.info("Perform data cleaning on the weather data...")
         for index in range(0, len(weather_data)):
             weather_data[index] = self.preprocess_geo_data(weather_data[index])
@@ -193,6 +193,7 @@ class Preprocessing:
             else:
                 only_labels = False
             energy_df = self.preprocess_energy_data(energy_df, deployment = deployment, only_labels = only_labels)
+
             df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge, deployment = deployment)
 
         df = df.drop(["forecast_horizon"], axis = 1)
@@ -807,6 +808,13 @@ class Preprocessing:
         merged_data = geo_data.merge(energy_data, left_on = left_merge, right_on = right_merge, how = how_to_merge)
         merged_data = merged_data.bfill()
         merged_data = merged_data.ffill()
+
+        if merged_data.shape[0] == 0 and deployment:
+            geo_data["installed_capacity_mwp"] = 2956.7452510000003
+            geo_data["capacity_mwp"] = 2779.2829846
+            geo_data["unused_capacity_mwp"] = geo_data["installed_capacity_mwp"] - geo_data["capacity_mwp"]
+            merged_data = geo_data.copy()
+
 
         for col in self.non_numerical_columns[:]:
             # check for valid input
