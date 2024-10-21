@@ -254,8 +254,8 @@ class Preprocessing:
                 return self.cyclic_sin(month / 12)
             elif time_information.lower() == "day":
                 return self.cyclic_sin(day / days_in_month[month])
-            # elif time_information.lower() == "dayofweek":
-            #     return self.cyclic_sin(d.weekday() / 7)
+            elif time_information.lower() == "dayofweek":
+                return self.cyclic_sin(d.weekday() / 7)
             elif time_information.lower() == "hour":
                 return self.cyclic_sin(d.hour / 60)
             elif time_information.lower() == "minute":
@@ -364,13 +364,14 @@ class Preprocessing:
         return df
     
 
-    def preprocess_energy_data(self, df_energy, deployment:bool = False, only_labels:bool = True):
+    def preprocess_energy_data(self, df_energy, deployment:bool = False, only_labels:bool = True, trading:bool = False):
         """Data cleaning and feature extraction of the energy data.
         
         Parameters:
             - df_energy: energy data as a pandas.DataFrame object which is the result of the extracted files by the FileExtractor class.
             - deployment: if True, will assume there is no available label data and only extract the features.
             - only_labels: if True, will make sure that during the training phase for wind energy production, only the relevant labels and time information will be extracted.
+            - trading: if True, will return all columns (intended for the trading challenge).
 
         Returns:
             - df_energy: preprocessed energy data as a pandas.DataFrame object.
@@ -402,15 +403,18 @@ class Preprocessing:
 
             # for the case, if the preprocessing is set during the training phase, but the weather data is only relevant for the wind energy forecast
             if only_labels:
-                df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit"]]
+                if trading == False:
+                    df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit"]]
             else:
                 df_energy["unused_capacity_mwp"] = df_energy["installed_capacity_mwp"] - df_energy["capacity_mwp"]
-                df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
+                if trading == False:
+                    df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
         else:
             df_energy.rename(columns = {"Solar_installedcapacity_mwp": "installed_capacity_mwp", "Solar_capacity_mwp": "capacity_mwp"}, inplace = True)
             df_energy = df_energy.drop_duplicates()
             df_energy["unused_capacity_mwp"] = df_energy["installed_capacity_mwp"] - df_energy["capacity_mwp"]
-            df_energy = df_energy[["dtm", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
+            if trading == False:
+                df_energy = df_energy[["dtm", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
 
         return df_energy
 
@@ -487,9 +491,9 @@ class Preprocessing:
 
         if df["ref_time"].dt.tz is None:
             df["ref_time"] = df["ref_time"].dt.tz_localize("UTC")
-
+            
         if not pd.api.types.is_datetime64_any_dtype(df['val_time']):
-            if df["val_time"].max() < 1000:
+            if pd.api.types.is_any_real_numeric_dtype(df["val_time"]):
                 df["forecast_horizon"] = df["val_time"]
                 df["val_time"] = df["ref_time"] + pd.to_timedelta(df["val_time"], unit = "hour")
             else:
