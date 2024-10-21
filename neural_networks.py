@@ -264,17 +264,17 @@ class CNN_LSTM(model_utils.BaseModel):
         
         x = Conv1D(filters=self.cnn_filters, kernel_size=3, padding='same', activation=self.activation)(inputs)
         x = Dropout(0.3)(x)
-        x = Conv1D(filters=self.cnn_filters, kernel_size=3, padding='same', activation=self.activation)(x)
-        x = Dropout(0.3)(x)
-        x = Conv1D(filters=self.cnn_filters, kernel_size=3, padding='same', activation=self.activation)(x)
-        x = Dropout(0.3)(x)
+        # x = Conv1D(filters=self.cnn_filters, kernel_size=3, padding='same', activation=self.activation)(x)
+        # x = Dropout(0.3)(x)
+        # x = Conv1D(filters=self.cnn_filters, kernel_size=3, padding='same', activation=self.activation)(x)
+        # x = Dropout(0.3)(x)
 
         x = LSTM(self.lstm_layers, return_sequences=True)(x)
         x = Dropout(0.3)(x)
         x = LSTM(self.lstm_layers, return_sequences=True)(x)
         x = Dropout(0.3)(x)
-        x = LSTM(self.lstm_layers, return_sequences=True)(x)
-        x = Dropout(0.3)(x)
+        # x = LSTM(self.lstm_layers, return_sequences=True)(x)
+        # x = Dropout(0.3)(x)
 
         attention = Attention()(x)
         outputs = Dense(self.forecast_length)(attention)
