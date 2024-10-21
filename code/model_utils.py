@@ -99,6 +99,16 @@ class BaseModel:
             score.append(self.pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean())
         return sum(score) / len(score)
     
+    def pinball_score_single(df, qu):
+        score = pinball(y=df["true"],
+                                q=df[f"{qu}"],
+                                alpha=qu).mean()
+        return score
+    
+    def list_pinball_scores(pred_and_true, quantiles = np.arange(0.1, 1.0, 0.1).round(2)):
+        for q in quantiles:
+            print(f"{q}", BaseModel.pinball_score_single(pred_and_true, q))
+
     def sort_quantiles(self, data, quantiles):
         """sorting quantiles so that smaller quantiles have smaller values"""
         quantile_keys = [str(qu) for qu in quantiles]
