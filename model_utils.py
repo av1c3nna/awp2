@@ -12,6 +12,9 @@ import lightgbm as lgb
 from lightgbm import early_stopping, log_evaluation
 import matplotlib.dates as mdates
 from datetime import datetime, date
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score, ParameterGrid, GridSearchCV, RandomizedSearchCV
+from sklearn.metrics import make_scorer
+from tensorflow.keras import backend as K
 
 
 def pinball(y, q, alpha):
@@ -23,7 +26,7 @@ def pinball_score(df, quantiles):
         # pinball loss for every quantile
         score.append(pinball(y=df["true"],
                              q=df[f"{qu}"],
-                             alpha=qu/100).mean())
+                             alpha=qu).mean())
     return sum(score)/len(score)  # avg pinball score
 
 
@@ -48,11 +51,22 @@ class BaseModel:
         """formula for pinball score"""
 
         return (y - q) * alpha * (y >= q) + (q - y) * (1 - alpha) * (y < q)
+    
+    def pinball_score_single(df, qu):
+        score = pinball(y=df["true"],
+                                q=df[f"{qu}"],
+                                alpha=qu).mean()
+        return score
+    
+    def list_pinball_scores(pred_and_true, quantiles = np.arange(0.1, 1.0, 0.1).round(2)):
+        for q in quantiles:
+            print(f"{q}", BaseModel.pinball_score_single(pred_and_true, q))
 
     def pinball_score(self):
         """pinball score implemetation"""
 
         score = []
+        self.q_predictions = {k: v.flatten() for k, v in self.q_predictions.items() if k != "date"}
         df = pd.DataFrame(self.q_predictions)
         for qu in self.quantiles:
             score.append(self.pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean())
@@ -319,7 +333,15 @@ class QuantileRegressorModel(BaseModel):
 
         return predictions
     
-
+# Define pinball loss function
+def pinball_loss(y_true, y_pred, quantile=0.9):
+    delta = y_true - y_pred
+    try:
+        loss = np.where(delta > 0, quantile * delta, (1 - quantile) * - delta)
+        return np.mean(loss)
+    except:
+        # source: https://github.com/sachinruk/KerasQuantileModel/blob/master/Keras%20Quantile%20Model.ipynb
+        return K.mean(K.maximum(quantile * delta, (quantile - 1) * delta), axis=-1)
 
 class LGBMRegressorModel(BaseModel):
     """lightgbm quantile regression"""
@@ -378,6 +400,48 @@ class LGBMRegressorModel(BaseModel):
         # **Set models_loaded to True after training so predict can be called immediately**
         self.models_loaded = True
 
+    def train_and_predict_hyperparametertuning(self, parameters):
+        """Train the LGBMRegressor models or use the pretrained ones."""
+        
+        cv = TimeSeriesSplit(n_splits=3)
+
+        for quantile in self.quantiles:
+            scorer = make_scorer(pinball_loss, greater_is_better=False, quantile=quantile)
+            print(f"--------Train model for Quantile {quantile}: ")
+            if not self.load_pretrained or quantile not in self.models:
+                # Train a new model for this quantile
+                lgbm = lgb.LGBMRegressor(objective='quantile', alpha=quantile, verbose=-1)
+                grid_lgbm = RandomizedSearchCV(estimator=lgbm, param_grid=parameters, cv=cv, n_jobs=-1, scoring = scorer, n_iter = 5)
+                grid_lgbm.fit(
+                    self.feature_engineerer.X_train, 
+                    self.feature_engineerer.y_train,
+                    eval_set=[(self.feature_engineerer.X_train, self.feature_engineerer.y_train), 
+                              (self.feature_engineerer.X_val, self.feature_engineerer.y_val)],
+                    eval_names=['train', 'valid'],
+                    eval_metric='quantile',
+                    callbacks=[early_stopping(stopping_rounds=50),log_evaluation(25)]
+                )
+
+                # Save the model
+                model_filename = os.path.join(self.model_save_dir, f"lgbm_model_quantile_{quantile}.pkl")
+                joblib.dump(grid_lgbm, model_filename)
+                print(f"Saved Quantile Regressor model for quantile {quantile} to {model_filename}")
+
+                # Store the model for prediction
+                self.models[quantile] = grid_lgbm
+            else:
+                print(f"Using the loaded pretrained Quantile Regressor model for quantile {quantile}")
+
+            # Predict and store the results
+            self.q_predictions[str(quantile)] = self.models[quantile].predict(self.feature_engineerer.X_test)
+
+        #sort results
+        self.q_predictions = self.sort_quantiles(self.q_predictions, self.quantiles)
+        self.q_predictions = self.replace_neg_values(self.q_predictions, self.quantiles)
+
+        # **Set models_loaded to True after training so predict can be called immediately**
+        self.models_loaded = True
+
     def predict(self, X_test):
         """Use the trained or loaded models to make predictions."""
         if not self.models_loaded:
@@ -409,4 +473,37 @@ class LGBMRegressorModel(BaseModel):
         plt.ylabel('Features')
         plt.title('Manuelle Feature Importance Visualisierung Lightgbm')
         plt.grid(True)
+        plt.show()
+
+
+
+def plot_quantile_performance(model_list, model_names, title, quantiles):
+        # Dictionary, um Scores für alle Modelle zu speichern
+        quantile_scores = {qu: [] for qu in quantiles}
+
+        for model in model_list:
+            # Flatten the predictions
+            model.q_predictions = {k: v.flatten() for k, v in model.q_predictions.items() if k != "date"}
+            df = pd.DataFrame(model.q_predictions)
+
+            # Berechnung der Pinball-Scores für jedes Quantil
+            for qu in quantiles:
+                score = pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean()
+                quantile_scores[qu].append(score)  # Score zum entsprechenden Quantil hinzufügen
+
+        
+        num_models = len(model_list)
+        bar_width = 0.15  
+        index = np.arange(len(quantiles))
+
+        
+        for i, model_scores in enumerate(zip(*quantile_scores.values())):
+            plt.bar(index + i * bar_width, model_scores, bar_width, label=model_names[i])
+
+        plt.xlabel('Quantile')
+        plt.ylabel('Pinball Score')
+        plt.title(title)
+        plt.xticks(index + bar_width * (num_models - 1) / 2, quantiles)  
+        plt.legend(title='Models')
+        plt.tight_layout()
         plt.show()
