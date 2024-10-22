@@ -334,6 +334,66 @@ class CNN_LSTM(model_utils.BaseModel):
         self.q_prediction_nn_df = pred_and_true
         
         return pred_and_true
+    
+
+from neural_networks import *
+
+class Keras_LSTM(CNN_LSTM):
+    def __init__(self, feature_engineerer, sequence_length, forecast_length:int = 1,
+                 quantiles = np.arange(0.1, 1.0, 0.1).round(2), 
+                 cnn_filters:int = 128, activation:str="relu", lstm_layers:int = 200):
+        self.feature_engineerer = feature_engineerer
+        self.forecast_length = forecast_length
+        self.sequence_length = sequence_length
+        self.cnn_filters = cnn_filters
+        self.activation = activation
+        self.lstm_layers = lstm_layers
+        self.quantiles = quantiles
+
+    # Build the model
+    def create_model(self, input_shape, quantile):
+        
+        input = Input(input_shape)
+        x = LSTM(self.lstm_layers, return_sequences=True)(input)
+        x = Dropout(0.3)(x)
+
+        attention = Attention()(x)
+        outputs = Dense(self.forecast_length)(attention)
+
+        
+        model = Model(input, outputs)
+        model.compile(optimizer='adam', loss=lambda y,f: model_utils.pinball_loss(y, f, quantile),
+                      metrics = [lambda y,f: model_utils.pinball_loss(y, f, quantile)]
+                                    )
+            
+        return model
+
+    def fit_models(self, model_name:str, model_save_dir:str = "CNN_LSTM", verbose:int = 0, lr:float = 0.001, epochs:int = 20, batch_size:int = 64):
+        self.all_models = dict()
+        for q in self.quantiles:
+            print(q)
+            model = self.create_model((1, self.feature_engineerer.X_train.shape[1]), quantile = round(q, 2))
+
+            # Callbacks
+            early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+            reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=lr)
+
+            # Train the model
+            history = model.fit(self.feature_engineerer.X_train.reshape(self.feature_engineerer.X_train.shape[0], 1, self.feature_engineerer.X_train.shape[1]), 
+                                self.feature_engineerer.y_train.values, 
+                                epochs=epochs, batch_size=batch_size, 
+                                validation_data=(self.feature_engineerer.X_val.reshape(self.feature_engineerer.X_val.shape[0], 1, self.feature_engineerer.X_val.shape[1]), 
+                                                self.feature_engineerer.y_val.values),
+                                callbacks=[early_stopping, reduce_lr],
+                                verbose = verbose)
+            
+            self.all_models[dict] = model
+
+            if not os.path.exists(model_save_dir):
+                os.makedirs(model_save_dir)
+
+            model.save(f'{model_save_dir}/{model_name}_quantile_{q}.h5')
+            logging.info(f"Saved model at {model_save_dir}/{model_name}_quantile_{q}.h5")
 
 
 def get_prediction_for_all_models(feature_engineerer, model_dir, model_name_pattern, quantiles = np.arange(0.1, 1.0, 0.1).round(2)):
