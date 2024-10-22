@@ -281,7 +281,8 @@ class CNN_LSTM(model_utils.BaseModel):
 
         
         model = Model(inputs, outputs)
-        model.compile(optimizer='adam', loss=lambda y,f: model_utils.pinball_loss(y, f, quantile)
+        model.compile(optimizer='adam', loss=lambda y,f: model_utils.pinball_loss(y, f, quantile),
+                      metrics = [lambda y,f: model_utils.pinball_loss(y, f, quantile)]
                                     )
             
         return model
@@ -299,7 +300,7 @@ class CNN_LSTM(model_utils.BaseModel):
             history = model.fit(self.feature_engineerer.X_train.reshape(-1, self.sequence_length, self.feature_engineerer.X_train.shape[1]), 
                                 self.feature_engineerer.y_train.values.reshape(-1,self.sequence_length, 1), 
                                 epochs=epochs, batch_size=batch_size, 
-                                validation_data=(self.feature_engineerer.X_val.reshape(-1, self.sequence_length, 74), 
+                                validation_data=(self.feature_engineerer.X_val.reshape(-1, self.sequence_length, self.feature_engineerer.X_val.shape[1]), 
                                                 self.feature_engineerer.y_val.values.reshape(-1,self.sequence_length, 1)),
                                 callbacks=[early_stopping, reduce_lr],
                                 verbose = verbose)
@@ -311,6 +312,28 @@ class CNN_LSTM(model_utils.BaseModel):
 
             model.save(f'{model_save_dir}/{model_name}_quantile_{q}.h5')
             logging.info(f"Saved model at {model_save_dir}/{model_name}_quantile_{q}.h5")
+
+    def predict_with_keras(self, use_test_data:bool = False, quantiles:list = np.arange(0.1, 1.0, 0.1).round(2)):
+        pred_and_true = pd.DataFrame(index = self.feature_engineerer.y_test.index)
+        self.prediction_nn = dict()
+
+        for q in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+            q = np.round(q, 1)
+            m = tf.keras.saving.load_model(f"{self.model_save_dir}/{self.model_name}_quantile_{q}.h5", compile = False)
+            if use_test_data == False:
+                features = self.feature_engineerer.deployment_data.reshape(-1, 1, self.feature_engineerer.deployment_data.shape[1])
+            else:
+                features = self.feature_engineerer.X_test.reshape(-1, 1, self.feature_engineerer.X_test.shape[1])
+
+            pred = m.predict(features)[:, 0]
+            if len(pred.shape) > 2:
+                pred = pred[:, 0]
+            self.prediction_nn[str(q)] = pred
+            pred_and_true[str(q)] = pred
+
+        self.q_prediction_nn_df = pred_and_true
+        
+        return pred_and_true
 
 
 def get_prediction_for_all_models(feature_engineerer, model_dir, model_name_pattern, quantiles = np.arange(0.1, 1.0, 0.1).round(2)):
