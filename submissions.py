@@ -1,12 +1,13 @@
 # Imports
 import comp_utils
 from Preprocessing import Preprocessing, FeatureEngineerer
-import pandas as pd
 from model_utils import *
-from datetime import datetime, timedelta
+import pandas as pd
 import os
 import logging
 import copy
+from datetime import datetime, timedelta
+from typing import *
 
 logger = logging.getLogger('logger')
 logger.setLevel(logging.INFO)
@@ -18,9 +19,20 @@ class AutoSubmitter:
     (both wind and solar) for the next day. It is executed once daily to generate the predictions 
     and prepare them for submission to the Rebase API.
     """
-    def __init__(self, hornsea_model, pes_model):
+    def __init__(self, hornsea_model: Any, pes_model: Any) -> None:
         """
-        Initializes the AutoSubmitter with models and API client.
+        Initializes the AutoSubmitter with prediction models and sets up API client.
+
+        Args:
+            hornsea_model: Model used for predicting energy output for Hornsea 1.
+            pes_model: Model used for predicting energy output for PES Region 10.
+        
+        Returns:
+            None
+        
+        Raises:
+            FileNotFoundError: If the API key file is not found.
+            Exception: If there is an error initializing the API client.
         """
         logger.info("Initializing AutoSubmitter with models and API client...")
 
@@ -41,9 +53,17 @@ class AutoSubmitter:
             logger.error(f"Failed to initialize RebaseAPI client: {e}")
 
 
-    def fetch_data(self):
+    def fetch_data(self) -> "AutoSubmitter":
         """
-        Fetches current weather data for Hornsea 1 and PES Region 10, and stores energy data locally.
+        Fetches current weather data for Hornsea 1 and PES Region 10, as well as recent 
+        energy production data. The data is saved locally for reference.
+        
+        Returns:
+            self: The current instance of the AutoSubmitter with fetched data stored in attributes.
+        
+        Side Effects:
+            - Logs any issues encountered during data fetching.
+            - Creates necessary directories for storing fetched data.
         """
         logger.info("Fetching data...")
         self._saved_state = copy.deepcopy(self)
@@ -89,6 +109,9 @@ class AutoSubmitter:
             logger.info("Created directory for energy data.")
 
         # Fetch energy data
+        # today = datetime.today()
+        # earlier = today - timedelta(days=3)
+        # earlier = earlier.strftime('%Y-%m-%d')
         today = datetime.today().strftime('%Y-%m-%d')
         energy_fetched = self.rebase_api_client.get_variable(day=today, variable="solar_total_production").rename({"timestamp_utc": "dtm"}, axis=1)
         
@@ -109,9 +132,20 @@ class AutoSubmitter:
         return self
     
 
-    def _fetch_data(self, power, model):
+    def _fetch_data(self, power: str, model: str) -> pd.DataFrame:
         """
-        Fetches and converts weather data for the specified power source and weather model.
+        Fetches and processes weather data for a specific power source and weather model.
+        
+        Args:
+            power (str): The power source for which data is being fetched ('hornsea' or 'pes').
+            model (str): The weather model being used ('DWD_ICON-EU' or 'NCEP_GFS').
+        
+        Returns:
+            pd.DataFrame: Processed weather data in dataframe format.
+        
+        Raises:
+            Exception: If data fetching for a specific combination of power and model fails.
+            Logs warnings if data is missing relevant timestamps for the next day's market period.
         """
         now = datetime.now()
         start_time = pd.Timestamp(datetime(now.year, now.month, now.day, 23, 0, 0), tz='UTC')
@@ -161,9 +195,17 @@ class AutoSubmitter:
         return df_fetched
     
 
-    def prepare_data(self):
+    def prepare_data(self) -> "AutoSubmitter":
         """
-        Prepares the weather data for the machine learning model.
+        Processes and engineers features for the fetched weather data to prepare it for the 
+        prediction models. 
+        
+        Returns:
+            self: The current instance of the AutoSubmitter with preprocessed and engineered data.
+        
+        Side Effects:
+            - Logs steps of data preparation and any issues encountered.
+            - Updates `hornsea_data` and `pes_data` with processed data.
         """
         logger.info("Preparing data...")
         self._saved_state = copy.deepcopy(self)
@@ -189,9 +231,19 @@ class AutoSubmitter:
         return self
     
 
-    def _preprocess_data(self, power):
+    def _preprocess_data(self, power: str) -> pd.DataFrame:
         """
-        Preprocesses the weather data for the specified power source.
+        Preprocesses the weather data for a specified power source.
+        
+        Args:
+            power (str): The power source to preprocess data for ('hornsea' or 'pes').
+        
+        Returns:
+            pd.DataFrame: Preprocessed data.
+        
+        Raises:
+            Exception: If an error occurs during preprocessing.
+            FileNotFoundError: If required preprocessing files are missing.
         """
         preprocessor = Preprocessing()
         
@@ -223,9 +275,24 @@ class AutoSubmitter:
         return df_preprocessed
     
 
-    def _engineer_data(self, power, df_preprocessed):
+    def _engineer_data(self, power: str, df_preprocessed: pd.DataFrame) -> None:
         """
-        Performs feature engineering on preprocessed weather data for the specified power source.
+        Performs feature engineering on preprocessed data for a specified power source.
+        
+        Args:
+            power (str): The power source for which features are engineered ('hornsea' or 'pes').
+            df_preprocessed (pd.DataFrame): The preprocessed data.
+
+        Returns:
+            None
+        
+        Side Effects:
+            - Logs each step and issues encountered.
+            - Updates `hornsea_data` or `pes_data` with engineered features.
+        
+        Raises:
+            FileNotFoundError: If required feature engineering data is not found.
+            Exception: If an error occurs during feature engineering.
         """
         # Set importent parameters for the feature engineering depending on the specified energy producer
         if power == "hornsea":
@@ -267,9 +334,16 @@ class AutoSubmitter:
         getattr(self, f"{power}_data").update({"array_prepared": array_prepared})
 
 
-    def predict(self):
+    def predict(self) -> "AutoSubmitter":
         """
-        Makes predictions for the next using the Hornsea 1 and PES Region 10 models.
+        Uses the prediction models to forecast energy production for Hornsea 1 and PES Region 10 
+        for the next day.
+        
+        Returns:
+            self: The current instance with predictions stored in the `predictions` attribute.
+        
+        Raises:
+            Exception: If predictions for either power source fail.
         """
         logger.info("Making predictions...")
         self._saved_state = copy.deepcopy(self)
@@ -294,9 +368,20 @@ class AutoSubmitter:
         return self
 
 
-    def prepare_submission(self):
+    def prepare_submission(self) -> None:
         """
-        Prepares the submission data in the required format.
+        Prepares the prediction data for submission by formatting it according to API requirements.
+        
+        Returns:
+            None
+        
+        Side Effects:
+            - Logs the preparation process and any issues encountered.
+            - Updates `predictions` with the final, formatted data ready for submission.
+        
+        Raises:
+            Exception: If there are issues creating or formatting the submission data.
+            Logs warnings if any submission data values are missing or invalid.
         """
         logger.info("Preparing data for submission...")
         self._saved_state = copy.deepcopy(self)
@@ -313,7 +398,7 @@ class AutoSubmitter:
             index = self.hornsea_data["df_preprocessed"].index
             submission_data = pd.DataFrame(pred, index=index).merge(submission_data, how="right", left_on="val_time", right_on="datetime")
             # Set the predictions for the market bid
-            submission_data["market_bid"] = submission_data["q40"]
+            submission_data["market_bid"] = submission_data["q50"]
             # Check if submission data has the right shape
             if submission_data.shape != (48, 11):
                 logger.warning("There are less predictions values than there should be. Something seems to have gone wrong.")
@@ -322,7 +407,12 @@ class AutoSubmitter:
                 logger.warning("Predictions contain NaN values. Something seems to have gone wrong.")
             # Check if submission data contains any negative values
             if (submission_data.drop("datetime", axis=1) < 0).any().any():
-                logger.warning("Predictions contain negative values. Something seems to have gone wrong.")
+                logger.warning("Predictions contain negative values. Correcting invalid values...")
+                submission_data.drop("datetime", axis=1)[submission_data.drop("datetime", axis=1) < 0] = 0
+            # Check if submission data contains any values greater than 1800
+            if (submission_data.drop("datetime", axis=1) > 1800).any().any():
+                logger.warning("Predictions contain values greater than 1800. Correcting invalid values...")
+                submission_data.drop("datetime", axis=1)[submission_data.drop("datetime", axis=1) > 1800] = 1800
             logger.info("Successfully created dataframe of submission data.")
         except Exception as e:
             logger.error(f"Error occurred while creating the prediction dataframe: {e}")
@@ -334,13 +424,23 @@ class AutoSubmitter:
             logger.info("Successfully converted dataframe of submission data to json format.")
             self.predictions.update({"final": submission_data})
         except Exception as e:
-            logging.error(f"Error occurred while converting the prediction dataframe to json format: {e}")
+            logger.error(f"Error occurred while converting the prediction dataframe to json format: {e}")
             return self._saved_state
 
 
-    def submit(self):
+    def submit(self) -> None:
         """
-        Submits the final predictions to the Rebase API.
+        Submits the prepared prediction data to the Rebase API after user confirmation.
+        
+        Returns:
+            None
+        
+        Side Effects:
+            - Logs the submission status and any errors encountered.
+            - Accepts user input to confirm or cancel submission.
+        
+        Raises:
+            Exception: If submission to the Rebase API fails.
         """
 
         while True:
@@ -363,10 +463,3 @@ class AutoSubmitter:
                 return self
             else:
                 logger.info("Invalid input. Please enter 'y' or 'n'.")
-
-
-# Bei Implementierung des trading modells beachten: "The volume of energy traded in a single period is limited to the range 0 MWh to 1800 MWh, the
-# maximum generation output of the hybrid power plant. Bids outside of this range will be rejected by
-# the submission API."
-
-# wetter und energie daten speichern
