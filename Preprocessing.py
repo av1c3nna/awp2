@@ -415,7 +415,6 @@ class Preprocessing:
             df_energy["unused_capacity_mwp"] = df_energy["installed_capacity_mwp"] - df_energy["capacity_mwp"]
             if trading == False:
                 df_energy = df_energy[["dtm", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
-
         return df_energy
 
 
@@ -938,6 +937,9 @@ class FeatureEngineerer:
             #self.train_val_test_split(data)
 
             self.train_val_test_split_hardcoded(data)
+
+            if self.X_test.shape[0] == 0:
+                self.train_val_test_split(data)
 
         if len(self.columns_to_ohe) > 0:
             self.onehotencode(data, deployment = deployment)
