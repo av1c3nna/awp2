@@ -16,6 +16,8 @@ from sklearn.model_selection import TimeSeriesSplit, cross_val_score, ParameterG
 from sklearn.metrics import make_scorer
 from mapie.regression import MapieQuantileRegressor, MapieRegressor
 from mapie.conformity_scores import GammaConformityScore
+from tensorflow.keras import backend as K
+
 
 
 def pinball(y, q, alpha):
@@ -62,7 +64,8 @@ def plot_quantile_performance(model_list, model_names, title, quantiles, df_list
     plt.ylabel('Pinball Score')
     plt.title(title)
     plt.xticks(index + bar_width * (num_models - 1) / 2, quantiles)  
-    plt.legend(title='Models')
+    plt.legend(title='Models', fontsize=8, loc='upper right')
+    plt.grid(True)
     plt.tight_layout()
     plt.show()
 
@@ -373,8 +376,12 @@ class QuantileRegressorModel(BaseModel):
 # Define pinball loss function
 def pinball_loss(y_true, y_pred, quantile=0.9):
     delta = y_true - y_pred
-    loss = np.where(delta > 0, quantile * delta, (1 - quantile) * - delta)
-    return np.mean(loss)
+    try:
+        loss = np.where(delta > 0, quantile * delta, (1 - quantile) * - delta)
+        return np.mean(loss)
+    except:
+        err = y_true - y_pred
+        return K.mean(K.maximum(quantile * err, (quantile - 1) * err), axis=-1)
 
 class LGBMRegressorModel(BaseModel):
     """lightgbm quantile regression"""
@@ -436,7 +443,7 @@ class LGBMRegressorModel(BaseModel):
     def train_and_predict_hyperparametertuning(self, parameters, search="GridSearch"):
         """Train the LGBMRegressor models or use the pretrained ones."""
         
-        cv = TimeSeriesSplit(n_splits=3)
+        cv = TimeSeriesSplit(n_splits=2)
 
         for quantile in self.quantiles:
             scorer = make_scorer(pinball_loss, greater_is_better=False, quantile=quantile)
@@ -457,7 +464,7 @@ class LGBMRegressorModel(BaseModel):
                         callbacks=[early_stopping(stopping_rounds=50),log_evaluation(25)]
                     )
                 if search == "RandomSearch":
-                    grid_lgbm = RandomizedSearchCV(estimator=lgbm, param_distributions=parameters, cv=cv, n_jobs=-1, scoring = scorer, n_iter=20)
+                    grid_lgbm = RandomizedSearchCV(estimator=lgbm, param_distributions=parameters, cv=cv, n_jobs=-1, scoring = scorer, n_iter=10)
                     grid_lgbm.fit(
                         self.feature_engineerer.X_train, 
                         self.feature_engineerer.y_train,
@@ -553,7 +560,7 @@ class ConformalQuantilePredictionLGBM(BaseModel):
 
     def train_point_prediction(self, param_distribution):
         """trains 50% Quantile modell for point prediction"""
-        estimator = lgb.LGBMRegressor(objective='quantile', alpha=0.5, random_state=7,verbose=-1)
+        estimator = lgb.LGBMRegressor(random_state=7,verbose=-1)
         
         #hyperparametertuning
         optim_model = RandomizedSearchCV(
