@@ -5,7 +5,7 @@ import xarray
 import pandas as pd
 import os
 import json
-from datetime import datetime
+from datetime import datetime, date
 from math import sin, cos, pi
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, MinMaxScaler, RobustScaler
 from sklearn.model_selection import train_test_split, TimeSeriesSplit
@@ -165,7 +165,7 @@ class Preprocessing:
         else:
             logging.critical("Input must be either a file path or a pandas.DataFrame object.")
             sys.exit(0)
-            
+        
         logging.info("Perform data cleaning on the weather data...")
         for index in range(0, len(weather_data)):
             weather_data[index] = self.preprocess_geo_data(weather_data[index])
@@ -193,7 +193,10 @@ class Preprocessing:
             else:
                 only_labels = False
             energy_df = self.preprocess_energy_data(energy_df, deployment = deployment, only_labels = only_labels)
+
             df = self.merge_geo_energy_outage_data(df, energy_df, left_merge = left_merge, right_merge = right_merge, deployment = deployment)
+
+        df = df.drop(["forecast_horizon"], axis = 1)
 
         # sort the columns alphabetically to avoid errors during the Feature Engineering (aka keep the same order)
         df = df.reindex(sorted(df.columns), axis=1)
@@ -251,8 +254,8 @@ class Preprocessing:
                 return self.cyclic_sin(month / 12)
             elif time_information.lower() == "day":
                 return self.cyclic_sin(day / days_in_month[month])
-            # elif time_information.lower() == "dayofweek":
-            #     return self.cyclic_sin(d.weekday() / 7)
+            elif time_information.lower() == "dayofweek":
+                return self.cyclic_sin(d.weekday() / 7)
             elif time_information.lower() == "hour":
                 return self.cyclic_sin(d.hour / 60)
             elif time_information.lower() == "minute":
@@ -361,13 +364,14 @@ class Preprocessing:
         return df
     
 
-    def preprocess_energy_data(self, df_energy, deployment:bool = False, only_labels:bool = True):
+    def preprocess_energy_data(self, df_energy, deployment:bool = False, only_labels:bool = True, trading:bool = False):
         """Data cleaning and feature extraction of the energy data.
         
         Parameters:
             - df_energy: energy data as a pandas.DataFrame object which is the result of the extracted files by the FileExtractor class.
             - deployment: if True, will assume there is no available label data and only extract the features.
             - only_labels: if True, will make sure that during the training phase for wind energy production, only the relevant labels and time information will be extracted.
+            - trading: if True, will return all columns (intended for the trading challenge).
 
         Returns:
             - df_energy: preprocessed energy data as a pandas.DataFrame object.
@@ -399,16 +403,18 @@ class Preprocessing:
 
             # for the case, if the preprocessing is set during the training phase, but the weather data is only relevant for the wind energy forecast
             if only_labels:
-                df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit"]]
+                if trading == False:
+                    df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit"]]
             else:
                 df_energy["unused_capacity_mwp"] = df_energy["installed_capacity_mwp"] - df_energy["capacity_mwp"]
-                df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
+                if trading == False:
+                    df_energy = df_energy[["dtm", "Wind_MWh_credit", "Solar_MWh_credit", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
         else:
             df_energy.rename(columns = {"Solar_installedcapacity_mwp": "installed_capacity_mwp", "Solar_capacity_mwp": "capacity_mwp"}, inplace = True)
             df_energy = df_energy.drop_duplicates()
             df_energy["unused_capacity_mwp"] = df_energy["installed_capacity_mwp"] - df_energy["capacity_mwp"]
-            df_energy = df_energy[["dtm", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
-
+            if trading == False:
+                df_energy = df_energy[["dtm", "installed_capacity_mwp", "capacity_mwp", "unused_capacity_mwp"]]
         return df_energy
 
 
@@ -484,9 +490,9 @@ class Preprocessing:
 
         if df["ref_time"].dt.tz is None:
             df["ref_time"] = df["ref_time"].dt.tz_localize("UTC")
-
+            
         if not pd.api.types.is_datetime64_any_dtype(df['val_time']):
-            if df["val_time"].max() < 1000:
+            if pd.api.types.is_any_real_numeric_dtype(df["val_time"]):
                 df["forecast_horizon"] = df["val_time"]
                 df["val_time"] = df["ref_time"] + pd.to_timedelta(df["val_time"], unit = "hour")
             else:
@@ -519,6 +525,7 @@ class Preprocessing:
         if "rel_hum" in df.columns:
             df.loc[df["rel_hum"] > 100, "rel_hum"] = 100
             df.loc[df["rel_hum"] < 0, "rel_hum"] = 0
+            df = df.drop(["rel_hum"], axis = 1)
                 
         if "total_prec" in df.columns:
             df.loc[df["total_prec"] < 0, "total_prec"] = 0
@@ -543,7 +550,7 @@ class Preprocessing:
             - df: cleaned weather data.
         """
         features = list(df.columns)
-        for i in ["ref_time", "val_time", "lat", "long", "forecast_horizon"]:
+        for i in ["ref_time", "val_time", "lat", "long"]:
             if i in features:
                 features.remove(i)
                 
@@ -683,6 +690,11 @@ class Preprocessing:
                 df[f"{feature}_min_3h"] = df[f"{feature}"].rolling(6).min()
                 df[f"{feature}_max_3h"] = df[f"{feature}"].rolling(6).max()
 
+                df[f"{feature}_mean_1h"] = df[f"{feature}"].rolling(2).mean()
+                df[f"{feature}_std_1h"] = df[f"{feature}"].rolling(2).std()
+                df[f"{feature}_min_1h"] = df[f"{feature}"].rolling(2).min()
+                df[f"{feature}_max_1h"] = df[f"{feature}"].rolling(2).max()
+
                 df[f"{feature}_next_forecast"] = df[f"{feature}"].shift(-1)
 
         df = df.sort_values("val_time")
@@ -725,7 +737,7 @@ class Preprocessing:
             df["temp_range_3h"] = df["temp_max_3h"] - df["temp_min_3h"]
 
         # add the cyclic encoded features to the dataset.
-        for col in ["month", "day", "dayofweek", "hour"]:
+        for col in ["month", "day", "hour"]:
             time_col_sin = "sin_" + col
             time_col_cos = "cos_" + col
 
@@ -799,6 +811,13 @@ class Preprocessing:
         merged_data = geo_data.merge(energy_data, left_on = left_merge, right_on = right_merge, how = how_to_merge)
         merged_data = merged_data.bfill()
         merged_data = merged_data.ffill()
+  
+        if ("capacity_mwp" in merged_data.columns and merged_data[merged_data.isna().any(axis = 1)].shape[0] > 0):
+            logging.warning("Energy data seems to be empty. Maybe check out for overlapping time intervals? Replacing missing capacity values with last known constants.")
+            geo_data["installed_capacity_mwp"] = 2956.7452510000003
+            geo_data["capacity_mwp"] = 2779.2829846
+            geo_data["unused_capacity_mwp"] = geo_data["installed_capacity_mwp"] - geo_data["capacity_mwp"]
+            merged_data = geo_data.copy()
 
         for col in self.non_numerical_columns[:]:
             # check for valid input
@@ -835,7 +854,7 @@ class Preprocessing:
             - data: output data.
         """
 
-        for col in ['rel_hum', 'temp', 'total_precipitation',
+        for col in ['temp', 'total_precipitation',
                     'wind_direction', 'wind_speed', "wind_speed_100",
                     'cloud_cover', 'solar_down_rad',
                     "unused_capacity_mwp"]:
@@ -917,7 +936,10 @@ class FeatureEngineerer:
 
             #self.train_val_test_split(data)
 
-            self.train_val_test_split_by_year(data)
+            self.train_val_test_split_hardcoded(data)
+
+            if self.X_test.shape[0] == 0:
+                self.train_val_test_split(data)
 
         if len(self.columns_to_ohe) > 0:
             self.onehotencode(data, deployment = deployment)
@@ -947,20 +969,37 @@ class FeatureEngineerer:
 
 
 
-    def train_val_test_split_by_year(self, data, test_duration=12, val_duration=12):
-        """Perform a train-val-test split by the timespan of a year."""
+    # def train_val_test_split_by_year(self, data, test_duration=12, val_duration=12):
+    #     """Perform a train-val-test split by the timespan of a year."""
 
-        data = data.sort_index()
-        max_date = data.index.max()
-        test_start_date = max_date - timedelta(weeks=52*test_duration/12)
-        test_end_date = test_start_date + timedelta(weeks=26)
-        val_end_date = test_start_date - timedelta(days=1)
-        val_start_date = val_end_date - timedelta(weeks=52*val_duration/12)
+    #     data = data.sort_index()
+    #     max_date = data.index.max()
+    #     test_start_date = max_date - timedelta(weeks=52*test_duration/12)
+    #     test_end_date = test_start_date + timedelta(weeks=26)
+    #     val_end_date = test_start_date - timedelta(days=1)
+    #     val_start_date = val_end_date - timedelta(weeks=52*val_duration/12)
 
-        train_data = data[data.index < val_start_date]
-        val_data = data[(data.index >= val_start_date) & (data.index <= val_end_date)]
-        test_data = data[(data.index >= test_start_date) & (data.index <= test_end_date)]
+    #     train_data = data[data.index < val_start_date]
+    #     val_data = data[(data.index >= val_start_date) & (data.index <= val_end_date)]
+    #     test_data = data[(data.index >= test_start_date) & (data.index <= test_end_date)]
         
+    #     # Entferne die Spalten, die nicht benötigt werden
+    #     self.X_train = train_data.drop(self.labels_to_remove, axis=1)
+    #     self.y_train = train_data[self.label]
+
+    #     self.X_val = val_data.drop(self.labels_to_remove, axis=1)
+    #     self.y_val = val_data[self.label]
+
+    #     self.X_test = test_data.drop(self.labels_to_remove, axis=1)
+    #     self.y_test = test_data[self.label]
+
+
+    def train_val_test_split_hardcoded(self, data):
+        
+        train_data = data[data.index.date < date(2023, 1, 1)]
+        val_data = data[(data.index.date >= date(2023, 1, 1)) & (data.index.date < date(2023, 7, 1))]
+        test_data = data[(data.index.date >= date(2023, 7, 1)) & (data.index.date < date(2024, 1, 1))]
+
         # Entferne die Spalten, die nicht benötigt werden
         self.X_train = train_data.drop(self.labels_to_remove, axis=1)
         self.y_train = train_data[self.label]

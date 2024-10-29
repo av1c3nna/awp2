@@ -12,6 +12,11 @@ import lightgbm as lgb
 from lightgbm import early_stopping, log_evaluation
 import matplotlib.dates as mdates
 from datetime import datetime, date
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score, ParameterGrid, GridSearchCV, RandomizedSearchCV
+from sklearn.metrics import make_scorer
+from mapie.regression import MapieQuantileRegressor, MapieRegressor
+from mapie.conformity_scores import GammaConformityScore
+from tensorflow.keras import backend as K
 
 
 def pinball(y, q, alpha):
@@ -23,8 +28,44 @@ def pinball_score(df, quantiles):
         # pinball loss for every quantile
         score.append(pinball(y=df["true"],
                              q=df[f"{qu}"],
-                             alpha=qu/100).mean())
+                             alpha=qu).mean())
     return sum(score)/len(score)  # avg pinball score
+
+def plot_quantile_performance(model_list, model_names, title, quantiles, df_list=False):
+    # Dictionary, um Scores für alle Modelle zu speichern
+    quantile_scores = {qu: [] for qu in quantiles}
+    if not df_list:
+        for model in model_list:
+            # Flatten the predictions
+            model.q_predictions = {k: v.flatten() for k, v in model.q_predictions.items() if k != "date"}
+            df = pd.DataFrame(model.q_predictions)
+
+            # Berechnung der Pinball-Scores für jedes Quantil
+            for qu in quantiles:
+                score = pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean()
+                quantile_scores[qu].append(score)  # Score zum entsprechenden Quantil hinzufügen
+    if df_list:
+        for df in model_list:
+            
+            for qu in quantiles:
+                score = pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean()
+                quantile_scores[qu].append(score)  # Score zum entsprechenden Quantil hinzufügen
+    
+    num_models = len(model_list)
+    bar_width = 0.15  
+    index = np.arange(len(quantiles))
+
+    
+    for i, model_scores in enumerate(zip(*quantile_scores.values())):
+        plt.bar(index + i * bar_width, model_scores, bar_width, label=model_names[i])
+
+    plt.xlabel('Quantile')
+    plt.ylabel('Pinball Score')
+    plt.title(title)
+    plt.xticks(index + bar_width * (num_models - 1) / 2, quantiles)  
+    plt.legend(title='Models')
+    plt.tight_layout()
+    plt.show()
 
 
 # Base Model Class
@@ -53,11 +94,22 @@ class BaseModel:
         """pinball score implemetation"""
 
         score = []
+        self.q_predictions = {k: v.flatten() for k, v in self.q_predictions.items() if k != "date"}
         df = pd.DataFrame(self.q_predictions)
         for qu in self.quantiles:
             score.append(self.pinball(y=df["true"], q=df[str(qu)], alpha=qu).mean())
         return sum(score) / len(score)
     
+    def pinball_score_single(df, qu):
+        score = pinball(y=df["true"],
+                                q=df[f"{qu}"],
+                                alpha=qu).mean()
+        return score
+    
+    def list_pinball_scores(pred_and_true, quantiles = np.arange(0.1, 1.0, 0.1).round(2)):
+        for q in quantiles:
+            print(f"{q}", BaseModel.pinball_score_single(pred_and_true, q))
+
     def sort_quantiles(self, data, quantiles):
         """sorting quantiles so that smaller quantiles have smaller values"""
         quantile_keys = [str(qu) for qu in quantiles]
@@ -319,7 +371,15 @@ class QuantileRegressorModel(BaseModel):
 
         return predictions
     
-
+# Define pinball loss function
+def pinball_loss(y_true, y_pred, quantile=0.9):
+    delta = y_true - y_pred
+    try:
+        loss = np.where(delta > 0, quantile * delta, (1 - quantile) * - delta)
+        return np.mean(loss)
+    except:
+        err = y_true - y_pred
+        return K.mean(K.maximum(quantile * err, (quantile - 1) * err), axis=-1)
 
 class LGBMRegressorModel(BaseModel):
     """lightgbm quantile regression"""
@@ -378,6 +438,62 @@ class LGBMRegressorModel(BaseModel):
         # **Set models_loaded to True after training so predict can be called immediately**
         self.models_loaded = True
 
+    def train_and_predict_hyperparametertuning(self, parameters, search="GridSearch"):
+        """Train the LGBMRegressor models or use the pretrained ones."""
+        
+        cv = TimeSeriesSplit(n_splits=3)
+
+        for quantile in self.quantiles:
+            scorer = make_scorer(pinball_loss, greater_is_better=False, quantile=quantile)
+            print(f"--------Train model for Quantile {quantile}: ")
+            if not self.load_pretrained or quantile not in self.models:
+                # Train a new model for this quantile
+                lgbm = lgb.LGBMRegressor(objective='quantile', alpha=quantile, verbose=-1)
+
+                if search == "GridSearch":
+                    grid_lgbm = GridSearchCV(estimator=lgbm, param_grid=parameters, cv=cv, n_jobs=-1, scoring = scorer)
+                    grid_lgbm.fit(
+                        self.feature_engineerer.X_train, 
+                        self.feature_engineerer.y_train,
+                        eval_set=[(self.feature_engineerer.X_train, self.feature_engineerer.y_train), 
+                                (self.feature_engineerer.X_val, self.feature_engineerer.y_val)],
+                        eval_names=['train', 'valid'],
+                        eval_metric='quantile',
+                        callbacks=[early_stopping(stopping_rounds=50),log_evaluation(25)]
+                    )
+                if search == "RandomSearch":
+                    grid_lgbm = RandomizedSearchCV(estimator=lgbm, param_distributions=parameters, cv=cv, n_jobs=-1, scoring = scorer, n_iter=20)
+                    grid_lgbm.fit(
+                        self.feature_engineerer.X_train, 
+                        self.feature_engineerer.y_train,
+                        eval_set=[(self.feature_engineerer.X_train, self.feature_engineerer.y_train), 
+                                (self.feature_engineerer.X_val, self.feature_engineerer.y_val)],
+                        eval_names=['train', 'valid'],
+                        eval_metric='quantile',
+                        callbacks=[early_stopping(stopping_rounds=50),log_evaluation(25)]
+                    )
+
+                # Save the model
+                model_filename = os.path.join(self.model_save_dir, f"lgbm_model_quantile_{quantile}.pkl")
+                joblib.dump(grid_lgbm.best_estimator_, model_filename)
+                print(f"Saved Quantile Regressor model for quantile {quantile} to {model_filename}")
+
+                # Store the model for prediction
+                print(grid_lgbm.best_params_)
+                self.models[quantile] = grid_lgbm.best_estimator_
+            else:
+                print(f"Using the loaded pretrained Quantile Regressor model for quantile {quantile}")
+
+            # Predict and store the results
+            self.q_predictions[str(quantile)] = self.models[quantile].predict(self.feature_engineerer.X_test)
+
+        #sort results
+        self.q_predictions = self.sort_quantiles(self.q_predictions, self.quantiles)
+        self.q_predictions = self.replace_neg_values(self.q_predictions, self.quantiles)
+
+        # **Set models_loaded to True after training so predict can be called immediately**
+        self.models_loaded = True
+
     def predict(self, X_test):
         """Use the trained or loaded models to make predictions."""
         if not self.models_loaded:
@@ -410,3 +526,110 @@ class LGBMRegressorModel(BaseModel):
         plt.title('Manuelle Feature Importance Visualisierung Lightgbm')
         plt.grid(True)
         plt.show()
+
+
+class ConformalQuantilePredictionLGBM(BaseModel):
+    """lightgbm quantile regression"""
+    
+    def __init__(self, feature_engineerer, quantiles, model_save_dir, load_pretrained=False):
+        super().__init__(feature_engineerer, quantiles, model_save_dir, load_pretrained)
+        self.models = {}
+
+        if self.load_pretrained:
+            self._load_models()
+
+    def _load_models(self):
+        """Load the pretrained models from disk."""
+        point_model_filename = os.path.join(self.model_save_dir, "point_prediction_lgbm.pkl")
+        if os.path.exists(point_model_filename):
+            self.point_model = joblib.load(point_model_filename)
+            print(f"Loaded pretrained Point Prediction model (50%-Quantile) from {point_model_filename}")
+        else:
+            print("No pretrained Point Prediction model found. Training a new model instead.")
+
+        for quantile in self.quantiles:
+            model_filename = os.path.join(self.model_save_dir, f"conformal_quantile_prediction_lgbm{quantile}.pkl")
+            if os.path.exists(model_filename):
+                self.models[quantile] = joblib.load(model_filename)
+                self.models_loaded = True  # Set models_loaded to True when models are loaded
+                print(f"Loaded pretrained Quantile Regressor model for quantile {quantile} from {model_filename}")
+            else:
+                print(f"No pretrained model found for quantile {quantile}. Training a new model instead.")
+
+    def train_point_prediction(self, param_distribution):
+        """trains 50% Quantile modell for point prediction"""
+        estimator = lgb.LGBMRegressor(objective='quantile', alpha=0.5, random_state=7,verbose=-1)
+        
+        #hyperparametertuning
+        optim_model = RandomizedSearchCV(
+                                            estimator,
+                                            param_distributions=param_distribution,
+                                            n_jobs=-1,
+                                            n_iter=30,
+                                            cv=TimeSeriesSplit(n_splits=2),
+                                            random_state=7
+                                        )
+        optim_model.fit(self.feature_engineerer.X_train, self.feature_engineerer.y_train)
+        estimator = optim_model.best_estimator_
+        # Speichere das 50%-Quantil-Modell (Punktvorhersage)
+        point_model_filename = os.path.join(self.model_save_dir, "point_prediction_lgbm.pkl")
+        joblib.dump(estimator, point_model_filename)
+        print(f"Saved Point Prediction model (50%-Quantile) to {point_model_filename}")
+        return estimator
+    
+    def train_and_predict(self, param_distribution):
+        if not self.load_pretrained or not hasattr(self, 'point_model'):
+            # Trainiere ein neues Modell, falls kein vortrainiertes vorhanden ist
+            self.point_model = self.train_point_prediction(param_distribution=param_distribution)
+        else:
+            print("Using the loaded pretrained Point Prediction model (50%-Quantile).")
+
+
+        for quantile in self.quantiles:
+            if not self.load_pretrained or quantile not in self.models:
+                mapie = MapieRegressor(estimator=self.point_model, cv="prefit")
+                mapie.fit(self.feature_engineerer.X_train, self.feature_engineerer.y_train, X_calib=self.feature_engineerer.X_val, y_calib=self.feature_engineerer.y_val)
+                model_filename = os.path.join(self.model_save_dir, f"conformal_quantile_prediction_lgbm{quantile}.pkl")
+                joblib.dump(mapie, model_filename)
+                print(f"Saved Quantile Regressor model for quantile {quantile} and {1-quantile} to {model_filename}")
+
+                self.models[quantile] = mapie
+            else:
+                print(f"Using the loaded pretrained Conformal Quantile Regressor model for quantile {quantile}")
+            
+            y_pred, y_pis = self.models[quantile].predict(self.feature_engineerer.X_test, alpha=[quantile])
+            self.q_predictions[str(quantile)] = y_pis.reshape(-1,2)[:,0]
+            self.q_predictions[str(1-quantile)] = y_pis.reshape(-1,2)[:,1]
+        self.q_predictions["0.5"] = self.point_model.predict(self.feature_engineerer.X_test)
+
+        #sort results
+        self.q_predictions = self.sort_quantiles(self.q_predictions, self.quantiles)
+        self.q_predictions = self.replace_neg_values(self.q_predictions, self.quantiles)
+        self.q_predictions = self.replace_neg_values(self.q_predictions, [0.5])
+
+        # **Set models_loaded to True after training so predict can be called immediately**
+        self.models_loaded = True
+
+    
+    def predict(self, X_test):
+        """Use the trained or loaded models to make predictions."""
+        if not self.models_loaded:
+            raise ValueError("Models not loaded. You need to load or train the models first.")
+
+        predictions = {}
+        for quantile in self.quantiles:
+            if quantile not in self.models:
+                raise ValueError(f"Model for quantile {quantile} not available. Train or load the model first.")
+                
+            y_pred, y_pis = self.models[quantile].predict(X_test)
+            predictions[str(quantile)] = y_pis.reshape(-1,2)[:,0]
+            predictions[str(1-quantile)] = y_pis.reshape(-1,2)[:,1]
+        predictions["0.5"] = self.point_model.predict(X_test)
+            
+        #sort results
+        predictions = self.sort_quantiles(predictions, self.quantiles)
+        predictions = self.replace_neg_values(predictions, self.quantiles)
+        predictions = self.replace_neg_values(predictions, [0.5])
+
+        return predictions
+    
