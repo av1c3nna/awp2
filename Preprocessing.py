@@ -968,33 +968,14 @@ class FeatureEngineerer:
             self.y_train, self.y_val = y_train_val.iloc[train_index], y_train_val.iloc[val_index]
 
 
-
-    # def train_val_test_split_by_year(self, data, test_duration=12, val_duration=12):
-    #     """Perform a train-val-test split by the timespan of a year."""
-
-    #     data = data.sort_index()
-    #     max_date = data.index.max()
-    #     test_start_date = max_date - timedelta(weeks=52*test_duration/12)
-    #     test_end_date = test_start_date + timedelta(weeks=26)
-    #     val_end_date = test_start_date - timedelta(days=1)
-    #     val_start_date = val_end_date - timedelta(weeks=52*val_duration/12)
-
-    #     train_data = data[data.index < val_start_date]
-    #     val_data = data[(data.index >= val_start_date) & (data.index <= val_end_date)]
-    #     test_data = data[(data.index >= test_start_date) & (data.index <= test_end_date)]
-        
-    #     # Entferne die Spalten, die nicht benötigt werden
-    #     self.X_train = train_data.drop(self.labels_to_remove, axis=1)
-    #     self.y_train = train_data[self.label]
-
-    #     self.X_val = val_data.drop(self.labels_to_remove, axis=1)
-    #     self.y_val = val_data[self.label]
-
-    #     self.X_test = test_data.drop(self.labels_to_remove, axis=1)
-    #     self.y_test = test_data[self.label]
-
-
     def train_val_test_split_hardcoded(self, data):
+        """Perform a train-validation-test split with predefined dates to avoid the data containing the outages at the HORNSEA wind farm.
+        
+        Parameters:
+            - data: input data.
+        Returns:
+            None.
+        """
         
         train_data = data[data.index.date < date(2023, 1, 1)]
         val_data = data[(data.index.date >= date(2023, 1, 1)) & (data.index.date < date(2023, 7, 1))]

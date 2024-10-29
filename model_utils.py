@@ -19,6 +19,7 @@ from mapie.conformity_scores import GammaConformityScore
 from tensorflow.keras import backend as K
 
 
+
 def pinball(y, q, alpha):
     return (y - q) * alpha * (y >= q) + (q - y) * (1 - alpha) * (y < q)
 
@@ -63,7 +64,8 @@ def plot_quantile_performance(model_list, model_names, title, quantiles, df_list
     plt.ylabel('Pinball Score')
     plt.title(title)
     plt.xticks(index + bar_width * (num_models - 1) / 2, quantiles)  
-    plt.legend(title='Models')
+    plt.legend(title='Models', fontsize=8, loc='upper right')
+    plt.grid(True)
     plt.tight_layout()
     plt.show()
 
@@ -441,7 +443,7 @@ class LGBMRegressorModel(BaseModel):
     def train_and_predict_hyperparametertuning(self, parameters, search="GridSearch"):
         """Train the LGBMRegressor models or use the pretrained ones."""
         
-        cv = TimeSeriesSplit(n_splits=3)
+        cv = TimeSeriesSplit(n_splits=2)
 
         for quantile in self.quantiles:
             scorer = make_scorer(pinball_loss, greater_is_better=False, quantile=quantile)
@@ -462,7 +464,7 @@ class LGBMRegressorModel(BaseModel):
                         callbacks=[early_stopping(stopping_rounds=50),log_evaluation(25)]
                     )
                 if search == "RandomSearch":
-                    grid_lgbm = RandomizedSearchCV(estimator=lgbm, param_distributions=parameters, cv=cv, n_jobs=-1, scoring = scorer, n_iter=20)
+                    grid_lgbm = RandomizedSearchCV(estimator=lgbm, param_distributions=parameters, cv=cv, n_jobs=-1, scoring = scorer, n_iter=10)
                     grid_lgbm.fit(
                         self.feature_engineerer.X_train, 
                         self.feature_engineerer.y_train,
@@ -518,8 +520,8 @@ class LGBMRegressorModel(BaseModel):
             # 'Importance': qr_lgbm.feature_importances_
         })
         self.importance_df["feature_name"] = feature_dataset.drop(['Solar_MWh_credit', 'Wind_MWh_credit'], axis=1).columns
-        # Plotten der Feature Importance
-        plt.figure(figsize=(12, 8))  # Plot-Größe anpassen
+        # plot feature importance
+        plt.figure(figsize=(12, 8))  # adjust plot size
         plt.barh(self.importance_df['feature_name'], self.importance_df['Importance'])
         plt.xlabel('Feature Importance')
         plt.ylabel('Features')
@@ -558,7 +560,7 @@ class ConformalQuantilePredictionLGBM(BaseModel):
 
     def train_point_prediction(self, param_distribution):
         """trains 50% Quantile modell for point prediction"""
-        estimator = lgb.LGBMRegressor(objective='quantile', alpha=0.5, random_state=7,verbose=-1)
+        estimator = lgb.LGBMRegressor(random_state=7,verbose=-1)
         
         #hyperparametertuning
         optim_model = RandomizedSearchCV(
@@ -571,7 +573,7 @@ class ConformalQuantilePredictionLGBM(BaseModel):
                                         )
         optim_model.fit(self.feature_engineerer.X_train, self.feature_engineerer.y_train)
         estimator = optim_model.best_estimator_
-        # Speichere das 50%-Quantil-Modell (Punktvorhersage)
+        # save the 50% quantile model (point prediction)
         point_model_filename = os.path.join(self.model_save_dir, "point_prediction_lgbm.pkl")
         joblib.dump(estimator, point_model_filename)
         print(f"Saved Point Prediction model (50%-Quantile) to {point_model_filename}")
@@ -579,7 +581,7 @@ class ConformalQuantilePredictionLGBM(BaseModel):
     
     def train_and_predict(self, param_distribution):
         if not self.load_pretrained or not hasattr(self, 'point_model'):
-            # Trainiere ein neues Modell, falls kein vortrainiertes vorhanden ist
+            # fit a new model in case there is none saved
             self.point_model = self.train_point_prediction(param_distribution=param_distribution)
         else:
             print("Using the loaded pretrained Point Prediction model (50%-Quantile).")
