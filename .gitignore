@@ -1,11 +1,9 @@
-*/csv_files/*
-*/nc_file/*
+csv_files/*
+nc_file/*
 */nc_files/*
-*/nc_files/REMIT/*
-*\nc_files\REMIT
-\nc_files\REMIT
-/api_files/*
-*/json_files
+nc_files/REMIT/*
+api_files/*
+json_files/*.json
 */__pycache__
 /qr_model_wind
 /qr_model_solar
@@ -22,3 +20,18 @@ zeug.txt
 *.r
 *.bkp
 *.zip
+api_exploration.ipynb
+all_scores.pickle
+api_key.txt
+DanMaLeo_key.txt
+eda_utils.py
+explorative_data_analysis_cleaned.ipynb
+LSTM_PyTorch_Wind
+*.pkl
+LSTM_wind
+model_training.ipynb
+model_training - Kopie.ipynb
+openapi.json
+wind_model_lstm_*
+test_prep.ipynb
+team_key.txt
