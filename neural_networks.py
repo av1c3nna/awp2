@@ -15,13 +15,32 @@ from tensorflow.keras.saving import load_model
 
 
 def save_pytorch_model(model, model_name):
+    """Save a PyTorch model with a given file name.
+    
+    Parameters:
+        - model: model object to save.
+        - model_name: file name of the model as which it is supposed to be saved.
+    Returns:
+        None.
+    """
     torch.save(model.state_dict(), f"{model_name}")
 
 def load_pytorch_model(class_name, model_name, len_features, quantiles = np.arange(0.1, 1.0, 0.1).round(2)):
+    """Load a PyTorch model with a given file name.
+    
+    Parameters:
+        - class_name: Python class name of the model.
+        - model_name: file name of the model as which it is supposed to be saved.
+        - len_features: length of features the model takes as input.
+        - quantiles: quantiles to load, expects at least one of those values: 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9.
+    Returns:
+        None.
+    """
     model = class_name(quantiles = quantiles, len_features = len_features)
     return model.load_state_dict(torch.load(f"{model_name}", weights_only=True))
 
 class q_model(nn.Module):
+    """Model class of a simple neural network with fully connected layers."""
     def __init__(self, 
                  quantiles, 
                  in_shape=50,  
@@ -43,7 +62,6 @@ class q_model(nn.Module):
         self.linear2 = nn.Linear(50, 20)
         self.activation = nn.ReLU()
 
-        
         # Final layers for quantiles
         final_layers = [
             nn.Linear(20, 1) for _ in range(len(self.quantiles))
@@ -52,7 +70,7 @@ class q_model(nn.Module):
 
     def forward(self, x):
 
-        out = self.linear1(out)
+        out = self.linear1(x)
         out = self.activation(out)
         out = self.linear2(out)
         out = self.activation(out)
@@ -71,13 +89,10 @@ class q_model(nn.Module):
             if isinstance(m, nn.Linear):
                 nn.init.orthogonal_(m.weight)
                 nn.init.constant_(m.bias, 0)        
-        
-    # def forward(self, x):
-    #     tmp_ = self.base_model(x)
-    #     return torch.cat([layer(tmp_) for layer in self.final_layers], dim=1)
 
 
 class LSTM_model(q_model):
+    """PyTorch implementation of a LSTM model with one LSTM layer and a fully connected layer."""
     def __init__(self, quantiles= np.arange(0.1, 1.0, 0.1).round(2), 
                  in_shape=50,  
                  dropout=0.5,
@@ -108,23 +123,8 @@ class LSTM_model(q_model):
                 nn.init.orthogonal_(m.weight)
                 nn.init.constant_(m.bias, 0)   
     
-
 class QuantileLoss(nn.Module):
-    def __init__(self, quantiles):
-        super().__init__()
-        self.quantiles = quantiles
-        
-    def forward(self, preds, target):
-        assert not target.requires_grad
-        assert preds.size(0) == target.size(0)
-        losses = []
-        for i, q in enumerate(self.quantiles):
-            errors = target - preds[:, i]
-            losses.append(torch.max((q-1) * errors, q * errors).unsqueeze(1))
-        loss = torch.mean(torch.sum(torch.cat(losses, dim=1), dim=1))
-        return loss
-    
-class QuantileLoss2(nn.Module):
+    """Quantile loss function which will be used by the PyTorch models for evaluation."""
     def __init__(self, quantiles):
         super().__init__()
         self.quantiles = quantiles
@@ -141,6 +141,7 @@ class QuantileLoss2(nn.Module):
         return loss
     
 class Learner(model_utils.BaseModel):
+    """Model optimizer for PyTorch models."""
     def __init__(self, model, optimizer_class, loss_func, lr):
         self.lr = lr
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -179,14 +180,13 @@ class Learner(model_utils.BaseModel):
             self.model.eval()
         return self.model(torch.from_numpy(x).to(self.device).requires_grad_(False)).cpu().detach().numpy()
 
-import pytorch_forecasting
-
 class Trainer(model_utils.BaseModel):
+    """Model fitter for PyTorch models."""
     def __init__(self, feature_engineerer, model_class, quantiles, optimizer_class=torch.optim.Adam, in_shape=50, dropout=0.1, weight_decay=1e-6, lr = 0.01, batch_size = 96):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.quantiles = quantiles
         self.feature_engineerer = feature_engineerer
-        self.loss_func = QuantileLoss2(self.quantiles)
+        self.loss_func = QuantileLoss(self.quantiles)
         self.lr = lr
         self.batch_size = batch_size
         
@@ -225,9 +225,20 @@ class Trainer(model_utils.BaseModel):
         print(f"pinball score {model_utils.pinball_score(self.q_prediction_nn_df, quantiles=self.quantiles)}")
 
 
-# https://github.com/sachinruk/KerasQuantileModel/blob/master/Keras%20Quantile%20Model.ipynb
+    def save_model(self, path):
+        torch.save(self.model.state_dict(), path)
+        print(f"Model saved to {path}")
+    
+    # Load the model from a file
+    def load_model(self, path):
+        self.model.load_state_dict(torch.load(path))
+        self.model.eval()  # Set model to evaluation mode
+        print(f"Model loaded from {path}")
+
+
 @tf.keras.utils.register_keras_serializable()
 class Attention(Layer):
+    """Attention layer of the CNN-LSTM and LSTM models implemented in Tensorflow Keras. Source: https://github.com/sachinruk/KerasQuantileModel/blob/master/Keras%20Quantile%20Model.ipynb"""
     def __init__(self, **kwargs):
         super(Attention, self).__init__(**kwargs)
 
@@ -264,27 +275,19 @@ class CNN_LSTM(model_utils.BaseModel):
         
         x = Conv1D(filters=self.cnn_filters, kernel_size=3, padding='same', activation=self.activation)(inputs)
         x = Dropout(0.3)(x)
-        # x = Conv1D(filters=self.cnn_filters, kernel_size=3, padding='same', activation=self.activation)(x)
-        # x = Dropout(0.3)(x)
-        # x = Conv1D(filters=self.cnn_filters, kernel_size=3, padding='same', activation=self.activation)(x)
-        # x = Dropout(0.3)(x)
 
         x = LSTM(self.lstm_layers, return_sequences=True)(x)
         x = Dropout(0.3)(x)
         x = LSTM(self.lstm_layers, return_sequences=True)(x)
         x = Dropout(0.3)(x)
-        # x = LSTM(self.lstm_layers, return_sequences=True)(x)
-        # x = Dropout(0.3)(x)
 
         attention = Attention()(x)
         outputs = Dense(self.forecast_length)(attention)
 
-        
         model = Model(inputs, outputs)
         model.compile(optimizer='adam', loss=lambda y,f: model_utils.pinball_loss(y, f, quantile),
                       metrics = [lambda y,f: model_utils.pinball_loss(y, f, quantile)]
                                     )
-            
         return model
 
     def fit_models(self, model_name:str, model_save_dir:str = "CNN_LSTM", verbose:int = 0, lr:float = 0.001, epochs:int = 20, batch_size:int = 64):
@@ -339,6 +342,7 @@ class CNN_LSTM(model_utils.BaseModel):
 from neural_networks import *
 
 class Keras_LSTM(CNN_LSTM):
+    """CNN-LSTM model implemented in Tensorflow Keras. Source: https://github.com/sachinruk/KerasQuantileModel/blob/master/Keras%20Quantile%20Model.ipynb"""
     def __init__(self, feature_engineerer, sequence_length, forecast_length:int = 1,
                  quantiles = np.arange(0.1, 1.0, 0.1).round(2), 
                  cnn_filters:int = 128, activation:str="relu", lstm_layers:int = 200):
@@ -365,7 +369,6 @@ class Keras_LSTM(CNN_LSTM):
         model.compile(optimizer='adam', loss=lambda y,f: model_utils.pinball_loss(y, f, quantile),
                       metrics = [lambda y,f: model_utils.pinball_loss(y, f, quantile)]
                                     )
-            
         return model
 
     def fit_models(self, model_name:str, model_save_dir:str = "CNN_LSTM", verbose:int = 0, lr:float = 0.001, epochs:int = 20, batch_size:int = 64):
@@ -397,6 +400,16 @@ class Keras_LSTM(CNN_LSTM):
 
 
 def get_prediction_for_all_models(feature_engineerer, model_dir, model_name_pattern, quantiles = np.arange(0.1, 1.0, 0.1).round(2)):
+    """Get the predictions for test data sets using Keras models since there is one model for each quantile.
+
+    Parameters:
+        - feature_engineerer: Feature Engineerer class instance (Preprocessing.FeatureEngineerer)
+        - model_dir: directory of the model files.
+        - model_name_pattern: name pattern of the model. No exact names, since each quantile has the same pattern, but a different file name.
+        - quantiles: quantiles to use for the prediction.
+    Returns:
+        - pred_and_true: DataFrame class object with the true values and the predicted values.
+    """
     pred_and_true = pd.DataFrame(index = feature_engineerer.y_test.index)
 
     for q in quantiles:
