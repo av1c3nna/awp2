@@ -123,7 +123,7 @@ class Preprocessing:
 
     def perform_preprocessing_pipeline(self, geo_data_dict:dict, 
                                        aggregate_by:str = "val_time", aggregate_by_ref_time_too:bool = True,
-                                       merge_with_outage_data:bool = True, json_file_path:str = "nc_files/REMIT",
+                                       merge_with_outage_data:bool = True, json_file_path:str = "Data/nc_files/REMIT",
                                        non_numerical_columns:list = ["unavailabilityType", "affectedUnit"],
                                        fft:bool = False, columns_to_fft:list = ["temp_diff", "solar_down_rad_diff", "wind_speed_diff", "wind_speed_100_diff"],
                                        deployment:bool = True, energy_data_dict:dict = dict(), left_merge:str = "val_time", right_merge:str = "dtm"):
