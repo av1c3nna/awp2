@@ -1,6 +1,8 @@
 # awp2
 University project based on the Hybrid Energy Forecasting and Trading Competition (https://ieee-dataport.org/competitions/hybrid-energy-forecasting-and-trading-competition)
 
+Group name: DanMaLeo4
+
 Preprocessing for wind data
 
 ![Preprocessing_Flowchart_Wind drawiov2](https://github.com/user-attachments/assets/5ed1ed23-b1e1-4c13-8d53-8592118afec1)
