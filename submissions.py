@@ -167,7 +167,7 @@ class AutoSubmitter:
                 geo_data_dict = {"dwd": self.hornsea_data["dwd_fetched"], "ncep": self.hornsea_data["gfs_fetched"]}
                 df_preprocessed = preprocessor.perform_preprocessing_pipeline(geo_data_dict,
                                                                             deployment=True,
-                                                                            json_file_path="REMIT")
+                                                                            json_file_path="Data/REMIT")
             except Exception as e:
                 logger.error(f"Error occured while preprocessing Hornsea 1 data: {e}")
                 return self._saved_state
@@ -175,10 +175,10 @@ class AutoSubmitter:
         elif power == "pes":
             try:
                 geo_data_dict = {"dwd": self.pes_data["dwd_fetched"], "ncep": self.pes_data["gfs_fetched"]}
-                energy_data_dict = {"energy_fetched": "energy_data_fetched"}
+                energy_data_dict = {"energy_fetched": "Data/energy_data_fetched"}
                 df_preprocessed = preprocessor.perform_preprocessing_pipeline(geo_data_dict,
                                                                             deployment=True,
-                                                                            json_file_path="REMIT",
+                                                                            json_file_path="Data/REMIT",
                                                                             energy_data_dict=energy_data_dict)
             except Exception as e:
                 logger.error(f"Error occured while preprocessing PES Region 10 data: {e}")
@@ -197,7 +197,7 @@ class AutoSubmitter:
         if power == "hornsea":
             logging_text = "Hornsea 1"
             try:
-                fe_data = pd.read_parquet("preprocessed_hornsea_with_energy.parquet")
+                fe_data = pd.read_parquet("Data/preprocessed_hornsea_with_energy.parquet")
             except FileNotFoundError:
                 logger.error("Preprocessed Hornsea 1 data not found. Please check if 'preprocessed_hornsea_with_energy.parquet' exists.")
                 return self._saved_state
@@ -209,7 +209,7 @@ class AutoSubmitter:
         elif power == "pes":
             logging_text = "PES Region 10"
             try:
-                fe_data = pd.read_parquet("preprocessed_pes_with_energy.parquet")
+                fe_data = pd.read_parquet("Data/preprocessed_pes_with_energy.parquet")
             except FileNotFoundError:
                 logger.error("Preprocessed PES Region 10 data not found. Please check if 'preprocessed_pes_with_energy.parquet' exists.")
                 return self._saved_state
