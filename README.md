@@ -3,6 +3,10 @@ University project based on the Hybrid Energy Forecasting and Trading Competitio
 
 Group name: DanMaLeo$
 
+- File Data: contains all the files used for the models, including preprocessed and raw data.
+- File Illustrations: contains images and charts.
+- File Models: contains all the trained models which were used for the evaluation and submission.
+  
 - Preprocessing.py: classes and methods for the preprocessing and feature engineering for the forecasting models
 - api_exploration.ipynb: provides an overview over the API methods of the Rebase API
 - comp_utils.py: methods provided by the competition organizers for extracting data and uploading submissions
