@@ -1,4 +1,4 @@
-name: awp_test_5
+name: damaleos
 channels:
   - anaconda
   - plotly
