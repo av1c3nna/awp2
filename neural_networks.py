@@ -260,7 +260,7 @@ class Attention(Layer):
 class CNN_LSTM(model_utils.BaseModel):
     def __init__(self, feature_engineerer, sequence_length, forecast_length:int = 1,
                  quantiles = np.arange(0.1, 1.0, 0.1).round(2), 
-                 cnn_filters:int = 128, activation:str="relu", lstm_layers:int = 200):
+                 cnn_filters:int = 100, activation:str="relu", lstm_layers:int = 50):
         self.feature_engineerer = feature_engineerer
         self.forecast_length = forecast_length
         self.sequence_length = sequence_length
