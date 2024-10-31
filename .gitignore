@@ -1,7 +1,4 @@
 csv_files/*
-nc_file/*
-*/nc_files/*
-nc_files/REMIT/*
 api_files/*
 json_files/*.json
 */__pycache__
