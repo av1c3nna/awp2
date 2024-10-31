@@ -21,3 +21,4 @@ Group name: DanMaLeo$
 - submission_utils.py: classes and methods required for the submission of the data
 - trading_exploration.ipynb: methods regarding solutions for the trading challenge
 
+to install environment.yml use: conda env create -f environment.yml
