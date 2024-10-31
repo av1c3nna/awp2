@@ -90,7 +90,7 @@ def show_histograms(plot):
     for i, column in enumerate(plot.columns):
         
         # Add the histogram
-        plot[column].hist(ax=axes[i], # Define on which ax we're working on
+        plot[column].hist(ax=axes[i], # Define ax
                         edgecolor='white', 
                         color='#69b3a2', 
                     )
@@ -246,14 +246,8 @@ def show_scatter(df,name, color_variable=None):
 
     plt.xlabel('Latitude')
     plt.ylabel('Longitude')
-
-    # Raster aktivieren
     plt.grid(True)
-
-    # Legende hinzufügen
     plt.legend()
-
-    # Plot anzeigen
     plt.show()
 
 def compare_scatter(dfs, names):
@@ -311,34 +305,6 @@ def plot_stations_on_map(dfs, names):
     # Karte anzeigen
     fig.show()
 
-def show_errorbar(plot):
-    plot = plot.iloc[:, 2:]
-
-    count = len(plot.columns)
-    features = []
-    for i in range(0, count, 2):
-    
-        features.append(plot.iloc[:, i:i+2].columns[0][0])
-    
-
-    fig, axes = plt.subplots(nrows=1, ncols=len(features), figsize=(20, 4))
-
-    axes = axes.flatten()
-    for i, column in enumerate(features):
-        
-        # Add the errorbar plot
-        axes[i].errorbar(plot.index, plot[column]['mean'], yerr=plot[column]['std'], fmt='o', label=column, elinewidth=3, capsize=0)
-        
-        # Add title and axis label
-        axes[i].set_title(f'{column} mit STD') 
-        axes[i].set_xlabel('Punkt') 
-        axes[i].set_ylabel(column) 
-        axes[i].grid(True)
-
-    plt.tight_layout()
-    plt.show()
-
-
 def energy_vs_feature(plot, energy, color, figsize=(20, 10)):
     """compares energy production to weather feature over time"""
 
@@ -354,18 +320,18 @@ def energy_vs_feature(plot, energy, color, figsize=(20, 10)):
 
             axes[i].plot(plot.index, plot[column], color, label=column)
             axes[i].set_xlabel('Date')
-            axes[i].set_ylabel(column, color=color)
-            axes[i].tick_params(axis='y', labelcolor=color)
+            axes[i].set_ylabel(column, color='black')
+            axes[i].tick_params(axis='y', labelcolor='black')
 
             axes2[i] = axes[i].twinx()
             axes2[i].plot(plot.index, plot[energy], 'orange', label=energy, alpha=0.7)
-            axes2[i].set_ylabel(energy, color='orange')
-            axes2[i].tick_params(axis='y', labelcolor='orange')
+            axes2[i].set_ylabel(energy, color='black')
+            axes2[i].tick_params(axis='y', labelcolor='black')
             
 
             axes[i].xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%Y-%m-%d'))
             axes[i].grid(True)
-            axes[i].set_title(f'{column} vs {energy} mit Zeitachse', fontweight="bold")
+            axes[i].set_title(f'Zusammenhang zwischen {column} und {energy} über Zeit', fontweight="bold", fontsize=16)
 
             
             axes[i].legend(loc='upper left')
@@ -420,7 +386,7 @@ def truncate_colormap(color, minval=0.0, maxval=1.0, n=100):
     return new_cmap
 
 def plot_wind_rose(df, title, ax=None):
-
+    """plot for visualizing windspeed and winddirection"""
     cmap = cm.viridis
     ws = df['WindSpeed:100']["mean"].to_numpy()
     wd = df['WindDirection:100']["mean"].to_numpy()
@@ -442,7 +408,6 @@ def plot_wind_rose(df, title, ax=None):
 
     # windRange = np.array([0, 3, 6, 9, 12, 15])
 
-    # Magically rounds the triangles (triangles to pizza slices if you will)
     plt.hist([0, 1])
     plt.close()
 
